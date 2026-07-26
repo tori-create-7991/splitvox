@@ -1,0 +1,7 @@
+.build/
+.worktrees/
+/.plans/
+*.xcodeproj
+.DS_Store
+Splitvox.app
+Recordings/
