@@ -6,6 +6,14 @@ if CommandLine.arguments.contains("--probe-tap") {
     exit(0)
 }
 
+if CommandLine.arguments.contains("--probe-aggregate") {
+    ProbeCommand.probeAggregate(
+        bundleIDs: Config.defaultMeetingBundleIDs,
+        preferredInputUID: nil
+    )
+    exit(0)
+}
+
 // Menu-bar-only app: no Dock icon, no Cmd+Tab entry.
 // Program entry runs on the main thread == the main actor.
 MainActor.assumeIsolated {

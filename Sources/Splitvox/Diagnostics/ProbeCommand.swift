@@ -63,4 +63,43 @@ enum ProbeCommand {
             print("\ntap creation FAILED: \(error.localizedDescription)")
         }
     }
+
+    /// `Splitvox --probe-aggregate` — build the real capture device and report
+    /// its channel layout, which decides how the recorder splits the incoming
+    /// buffer into the two files.
+    static func probeAggregate(bundleIDs: [String], preferredInputUID: String?) {
+        guard let input = AudioDeviceLookup.resolveInputDevice(preferredUID: preferredInputUID) else {
+            print("no input device available")
+            return
+        }
+
+        print("input devices:")
+        for device in AudioDeviceLookup.availableInputDevices() {
+            let marker = device.uid == input.uid ? " <- selected" : ""
+            print("  \(device.name)  [\(device.inputChannelCount) ch]  \(device.uid)\(marker)")
+        }
+
+        do {
+            let tap = try ProcessTap(bundleIDs: bundleIDs)
+            defer { tap.invalidate() }
+
+            let tapChannels = tap.streamDescription.map { Int($0.mChannelsPerFrame) } ?? 0
+            print("\ntap: \(tapChannels) ch, uid \(tap.uid)")
+
+            let aggregate = try AggregateDevice(tapUID: tap.uid, inputDeviceUID: input.uid)
+            defer { aggregate.invalidate() }
+
+            print("\naggregate device created")
+            print("  objectID:     \(aggregate.deviceID)")
+            print("  sample rate:  \(aggregate.nominalSampleRate) Hz")
+            print("  total input:  \(aggregate.inputChannelCount) ch")
+            print("  per stream:   \(aggregate.inputStreamChannelCounts)")
+            print("\n  expected: microphone \(input.inputChannelCount) ch + tap \(tapChannels) ch"
+                  + " = \(input.inputChannelCount + tapChannels) ch")
+            print("  -> the recorder needs to know which of these comes first;"
+                  + " that is what this output establishes.")
+        } catch {
+            print("\nFAILED: \(error.localizedDescription)")
+        }
+    }
 }
