@@ -14,6 +14,18 @@ if CommandLine.arguments.contains("--probe-aggregate") {
     exit(0)
 }
 
+if let index = CommandLine.arguments.firstIndex(of: "--probe-record") {
+    let seconds = CommandLine.arguments.dropFirst(index + 1).first.flatMap(Double.init) ?? 20
+    ProbeCommand.probeRecord(
+        bundleIDs: Config.defaultMeetingBundleIDs,
+        preferredInputUID: nil,
+        seconds: seconds,
+        outputDirectory: FileManager.default.temporaryDirectory
+            .appendingPathComponent("splitvox-probe", isDirectory: true)
+    )
+    exit(0)
+}
+
 // Menu-bar-only app: no Dock icon, no Cmd+Tab entry.
 // Program entry runs on the main thread == the main actor.
 MainActor.assumeIsolated {
