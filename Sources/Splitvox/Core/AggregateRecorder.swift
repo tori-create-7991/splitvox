@@ -255,10 +255,18 @@ final class AggregateRecorder {
             throw AggregateRecorderError.unsupportedSampleFormat
         }
 
+        // A WAV file is always interleaved on disk, so passing this key through
+        // from the in-memory format makes CoreAudio log
+        // "Audio files cannot be non-interleaved. Ignoring setting…" on every
+        // recording. The `interleaved: false` argument below is separate: it
+        // describes the buffers handed to `write(from:)`, not the file.
+        var settings = format.settings
+        settings.removeValue(forKey: AVLinearPCMIsNonInterleaved)
+
         do {
             return try AVAudioFile(
                 forWriting: url,
-                settings: format.settings,
+                settings: settings,
                 commonFormat: .pcmFormatFloat32,
                 interleaved: false
             )
