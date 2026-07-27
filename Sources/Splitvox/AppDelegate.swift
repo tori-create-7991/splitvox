@@ -1,5 +1,6 @@
 import AVFoundation
 import AppKit
+import KeyboardShortcuts
 import SwiftUI
 
 @MainActor
@@ -19,6 +20,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMainMenu()
         setupStatusItem()
+
+        KeyboardShortcuts.onKeyUp(for: .toggleRecording) { [weak self] in
+            self?.toggleRecording()
+        }
+    }
+
+    /// One key for both directions: during a meeting there is no time to check
+    /// which state the app is in before pressing something.
+    private func toggleRecording() {
+        switch session.state {
+        case .idle:
+            startRecording()
+        case .recording:
+            stopRecording()
+        case .transcribing:
+            // Already busy; a second press must not queue anything.
+            break
+        }
     }
 
     // MARK: - Menus
@@ -77,7 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// machine is the single source of truth for what the user can do.
     private func updateStatusItem() {
         guard let statusItem else { return }
-        statusItem.button?.title = session.statusTitle
+        applyStatusImage(to: statusItem)
 
         let menu = NSMenu()
 
@@ -119,6 +138,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "終了", action: #selector(quit), keyEquivalent: "q"))
 
         statusItem.menu = menu
+    }
+
+    /// Draw the status item from the session's symbol.
+    ///
+    /// Recording is drawn in red rather than as a template image: it is the one
+    /// state where the user needs to notice at a glance that capture is live,
+    /// and a monochrome icon in a full menu bar does not carry that.
+    private func applyStatusImage(to statusItem: NSStatusItem) {
+        guard let button = statusItem.button else { return }
+
+        let image = NSImage(
+            systemSymbolName: session.statusSymbolName,
+            accessibilityDescription: session.accessibilityDescription
+        )
+
+        if session.state == .recording {
+            let configuration = NSImage.SymbolConfiguration(paletteColors: [.systemRed])
+            button.image = image?.withSymbolConfiguration(configuration)
+        } else {
+            image?.isTemplate = true
+            button.image = image
+        }
+
+        button.toolTip = session.accessibilityDescription
     }
 
     // MARK: - Recording

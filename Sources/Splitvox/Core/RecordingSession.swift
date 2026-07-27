@@ -16,13 +16,26 @@ struct RecordingSession: Equatable {
     private(set) var state: RecordingState = .idle
     private(set) var lastErrorMessage: String?
 
-    /// Status-bar title for the current state. Owned here rather than in
+    /// SF Symbol shown in the status bar. Owned here rather than in
     /// `AppDelegate` so the mapping is covered by tests.
-    var statusTitle: String {
+    ///
+    /// Symbols rather than text characters because a menu bar with many items
+    /// makes a plain "●" indistinguishable from its neighbours.
+    var statusSymbolName: String {
         switch state {
-        case .idle: return "●"
-        case .recording: return "⏺"
-        case .transcribing: return "⋯"
+        case .idle: return "waveform"
+        case .recording: return "record.circle.fill"
+        case .transcribing: return "waveform.badge.clock"
+        }
+    }
+
+    /// Spoken by VoiceOver, and also what identifies this item in the menu bar
+    /// listings that otherwise show every third-party item as "status menu".
+    var accessibilityDescription: String {
+        switch state {
+        case .idle: return "Splitvox — 待機中"
+        case .recording: return "Splitvox — 録音中"
+        case .transcribing: return "Splitvox — 文字起こし中"
         }
     }
 

@@ -105,18 +105,33 @@ struct RecordingSessionTests {
         #expect(session.lastErrorMessage == nil)
     }
 
-    @Test("The status item title reflects the state")
-    func statusTitleReflectsState() {
+    @Test("The status item symbol reflects the state")
+    func statusSymbolReflectsState() {
         var session = RecordingSession()
-        #expect(session.statusTitle == "●")
+        #expect(session.statusSymbolName == "waveform")
 
         _ = session.start()
-        #expect(session.statusTitle == "⏺")
+        #expect(session.statusSymbolName == "record.circle.fill")
 
         _ = session.stop()
-        #expect(session.statusTitle == "⋯")
+        #expect(session.statusSymbolName == "waveform.badge.clock")
 
         _ = session.finish()
-        #expect(session.statusTitle == "●")
+        #expect(session.statusSymbolName == "waveform")
+    }
+
+    @Test("Every state names itself for accessibility and menu bar listings")
+    func everyStateHasAnAccessibilityDescription() {
+        var session = RecordingSession()
+        var descriptions: [String] = [session.accessibilityDescription]
+
+        _ = session.start()
+        descriptions.append(session.accessibilityDescription)
+
+        _ = session.stop()
+        descriptions.append(session.accessibilityDescription)
+
+        #expect(descriptions.allSatisfy { $0.contains("Splitvox") })
+        #expect(Set(descriptions).count == 3)
     }
 }

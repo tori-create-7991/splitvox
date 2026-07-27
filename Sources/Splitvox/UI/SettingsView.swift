@@ -1,3 +1,4 @@
+import KeyboardShortcuts
 import SwiftUI
 
 struct SettingsView: View {
@@ -41,6 +42,14 @@ struct SettingsView: View {
                 }
 
                 Text("仮想マイクを選ぶとノイズ除去済みの音声を録れますが、そのアプリが停止すると録音も止まります。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("ショートカット") {
+                KeyboardShortcuts.Recorder("録音の開始 / 停止", name: .toggleRecording)
+
+                Text("メニューバーのアイコンが他のアイコンに埋もれても、キー操作で録音できます。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
