@@ -14,6 +14,23 @@ if CommandLine.arguments.contains("--probe-aggregate") {
     exit(0)
 }
 
+if let index = CommandLine.arguments.firstIndex(of: "--probe-full") {
+    let seconds = CommandLine.arguments.dropFirst(index + 1).first.flatMap(Double.init) ?? 20
+    let done = DispatchSemaphore(value: 0)
+    Task {
+        await ProbeCommand.probeFull(
+            bundleIDs: Config.defaultMeetingBundleIDs,
+            preferredInputUID: nil,
+            seconds: seconds,
+            outputDirectory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("splitvox-probe", isDirectory: true)
+        )
+        done.signal()
+    }
+    done.wait()
+    exit(0)
+}
+
 if let index = CommandLine.arguments.firstIndex(of: "--probe-transcribe") {
     let directory = CommandLine.arguments.dropFirst(index + 1).first.map {
         URL(fileURLWithPath: $0)

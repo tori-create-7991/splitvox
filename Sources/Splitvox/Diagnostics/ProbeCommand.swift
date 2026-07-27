@@ -177,6 +177,31 @@ enum ProbeCommand {
             + (format.isInterleaved ? ", interleaved" : ", deinterleaved")
     }
 
+    /// `Splitvox --probe-full [seconds]` — record, then transcribe, in one run.
+    ///
+    /// The end-to-end path a real meeting takes, driven from the command line
+    /// so it can be exercised before the menu bar UI exists.
+    static func probeFull(
+        bundleIDs: [String],
+        preferredInputUID: String?,
+        seconds: TimeInterval,
+        outputDirectory: URL
+    ) async {
+        probeRecord(
+            bundleIDs: bundleIDs,
+            preferredInputUID: preferredInputUID,
+            seconds: seconds,
+            outputDirectory: outputDirectory
+        )
+
+        guard FileManager.default.fileExists(
+            atPath: RecordingStore.microphoneFileURL(in: outputDirectory).path
+        ) else { return }
+
+        print("\n================ transcription ================")
+        await probeTranscribe(directory: outputDirectory)
+    }
+
     /// `Splitvox --probe-transcribe [directory]` — transcribe an existing
     /// `me.wav` / `them.wav` pair and print the merged Markdown.
     ///
@@ -220,11 +245,10 @@ enum ProbeCommand {
             let them = try await transcriber.transcribe(fileURL: systemAudioURL)
             print("  \(them.count) segments")
 
-            let merged = TranscriptMerger.merge(me: me, them: them)
-            let coalesced = TranscriptMerger.coalesce(merged)
-            print("\nsegments: \(merged.count) -> \(coalesced.count) after coalescing")
+            let merged = TranscriptMerger.mergeCoalescing(me: me, them: them)
+            print("\nsegments: \(me.count + them.count) -> \(merged.count) after coalescing")
 
-            let markdown = TranscriptMerger.markdown(for: coalesced)
+            let markdown = TranscriptMerger.markdown(for: merged)
             print("\n--- transcript.md ---")
             print(markdown.isEmpty ? "(no speech recognised)" : markdown)
         } catch {

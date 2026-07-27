@@ -75,47 +75,61 @@ enum TranscriptMerger {
     /// second. Anything larger starts merging separate remarks.
     static let defaultCoalesceGap: TimeInterval = 1.0
 
-    /// Rejoin adjacent segments spoken by the same side.
+    /// Rejoin adjacent fragments of one speaker's transcript.
     ///
     /// `SpeechTranscriber`'s time-indexed preset finalises in very small units:
     /// a 20-second sample produced segments as short as a single character,
     /// mid-word. Rendering those one per line is unreadable, and the fragments
     /// are not meaningful on their own.
     ///
+    /// Takes one side's segments, not merged output, and that is deliberate.
+    /// Applying this after `merge` does nothing whenever both people are
+    /// talking: the timeline alternates speakers, so no two neighbouring
+    /// entries share a speaker and nothing ever joins. Coalesce each side
+    /// first, then merge.
+    ///
     /// Text is concatenated without a separator because the split happens
     /// inside words, not between them — Japanese does not space its words, and
     /// inserting one would corrupt the transcript.
     static func coalesce(
-        _ segments: [LabeledSegment],
+        _ segments: [TranscriptSegment],
         maxGap: TimeInterval = defaultCoalesceGap
-    ) -> [LabeledSegment] {
+    ) -> [TranscriptSegment] {
         guard segments.count > 1 else { return segments }
 
-        var result: [LabeledSegment] = []
+        var result: [TranscriptSegment] = []
         result.reserveCapacity(segments.count)
 
         for candidate in segments {
             guard let previous = result.last,
-                  previous.speaker == candidate.speaker,
-                  candidate.segment.start - previous.segment.end <= maxGap
+                  candidate.start - previous.end <= maxGap
             else {
                 result.append(candidate)
                 continue
             }
 
-            result[result.count - 1] = LabeledSegment(
-                speaker: previous.speaker,
-                segment: TranscriptSegment(
-                    start: previous.segment.start,
-                    // A fragment can finalise a range that ends before the one
-                    // it follows, so the wider end wins.
-                    end: max(previous.segment.end, candidate.segment.end),
-                    text: previous.segment.text + candidate.segment.text
-                )
+            result[result.count - 1] = TranscriptSegment(
+                start: previous.start,
+                // A fragment can finalise a range that ends before the one it
+                // follows, so the wider end wins.
+                end: max(previous.end, candidate.end),
+                text: previous.text + candidate.text
             )
         }
 
         return result
+    }
+
+    /// Coalesce each side, then interleave. The order matters — see `coalesce`.
+    static func mergeCoalescing(
+        me: [TranscriptSegment],
+        them: [TranscriptSegment],
+        maxGap: TimeInterval = defaultCoalesceGap
+    ) -> [LabeledSegment] {
+        merge(
+            me: coalesce(me, maxGap: maxGap),
+            them: coalesce(them, maxGap: maxGap)
+        )
     }
 
     /// Render as Markdown, one line per segment.
