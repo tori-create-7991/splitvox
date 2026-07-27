@@ -68,6 +68,56 @@ enum TranscriptMerger {
         }
     }
 
+    /// Default pause, in seconds, that still counts as one utterance.
+    ///
+    /// Chosen against a real recording: the recogniser split a single sentence
+    /// across gaps of roughly 0.2s, while genuine turn-taking left more than a
+    /// second. Anything larger starts merging separate remarks.
+    static let defaultCoalesceGap: TimeInterval = 1.0
+
+    /// Rejoin adjacent segments spoken by the same side.
+    ///
+    /// `SpeechTranscriber`'s time-indexed preset finalises in very small units:
+    /// a 20-second sample produced segments as short as a single character,
+    /// mid-word. Rendering those one per line is unreadable, and the fragments
+    /// are not meaningful on their own.
+    ///
+    /// Text is concatenated without a separator because the split happens
+    /// inside words, not between them — Japanese does not space its words, and
+    /// inserting one would corrupt the transcript.
+    static func coalesce(
+        _ segments: [LabeledSegment],
+        maxGap: TimeInterval = defaultCoalesceGap
+    ) -> [LabeledSegment] {
+        guard segments.count > 1 else { return segments }
+
+        var result: [LabeledSegment] = []
+        result.reserveCapacity(segments.count)
+
+        for candidate in segments {
+            guard let previous = result.last,
+                  previous.speaker == candidate.speaker,
+                  candidate.segment.start - previous.segment.end <= maxGap
+            else {
+                result.append(candidate)
+                continue
+            }
+
+            result[result.count - 1] = LabeledSegment(
+                speaker: previous.speaker,
+                segment: TranscriptSegment(
+                    start: previous.segment.start,
+                    // A fragment can finalise a range that ends before the one
+                    // it follows, so the wider end wins.
+                    end: max(previous.segment.end, candidate.segment.end),
+                    text: previous.segment.text + candidate.segment.text
+                )
+            )
+        }
+
+        return result
+    }
+
     /// Render as Markdown, one line per segment.
     static func markdown(for segments: [LabeledSegment]) -> String {
         segments

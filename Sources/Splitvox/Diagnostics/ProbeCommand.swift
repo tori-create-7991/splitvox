@@ -221,8 +221,10 @@ enum ProbeCommand {
             print("  \(them.count) segments")
 
             let merged = TranscriptMerger.merge(me: me, them: them)
-            let markdown = TranscriptMerger.markdown(for: merged)
+            let coalesced = TranscriptMerger.coalesce(merged)
+            print("\nsegments: \(merged.count) -> \(coalesced.count) after coalescing")
 
+            let markdown = TranscriptMerger.markdown(for: coalesced)
             print("\n--- transcript.md ---")
             print(markdown.isEmpty ? "(no speech recognised)" : markdown)
         } catch {
