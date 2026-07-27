@@ -1,14 +1,15 @@
 import AVFAudio
+import AudioToolbox
 import CoreAudio
 import Foundation
 
 enum AggregateRecorderError: LocalizedError {
     case noInputDevice
     case unexpectedChannelLayout([Int])
-    case audioUnitUnavailable
-    case deviceAssignmentFailed(OSStatus)
-    case unexpectedInputFormat(channels: Int, expected: Int)
-    case interleavedInputUnsupported
+    case ioProcCreationFailed(OSStatus)
+    case deviceStartFailed(OSStatus)
+    case fileCreationFailed(URL, underlying: Error)
+    case unsupportedSampleFormat
 
     var errorDescription: String? {
         switch self {
@@ -17,14 +18,16 @@ enum AggregateRecorderError: LocalizedError {
         case .unexpectedChannelLayout(let counts):
             return "集約デバイスのチャンネル構成が想定と異なります (\(counts))。"
                 + " --probe-aggregate で構成を確認してください"
-        case .audioUnitUnavailable:
-            return "オーディオ入力ユニットを取得できませんでした"
-        case .deviceAssignmentFailed(let status):
-            return "録音デバイスの割り当てに失敗しました (OSStatus \(status))"
-        case .unexpectedInputFormat(let channels, let expected):
-            return "入力チャンネル数が想定と異なります (実際 \(channels) / 想定 \(expected))"
-        case .interleavedInputUnsupported:
-            return "インターリーブ形式の入力には対応していません"
+        case .ioProcCreationFailed(let status):
+            return "録音コールバックを作成できませんでした (OSStatus \(status))"
+        case .deviceStartFailed(let status):
+            return "録音を開始できませんでした (OSStatus \(status))。"
+                + " マイクとシステム音声録音の許可を確認してください"
+        case .fileCreationFailed(let url, let underlying):
+            return "録音ファイルを作成できませんでした: \(url.lastPathComponent)"
+                + " (\(underlying.localizedDescription))"
+        case .unsupportedSampleFormat:
+            return "集約デバイスのサンプル形式に対応していません (32bit float 以外)"
         }
     }
 }
@@ -34,6 +37,12 @@ enum AggregateRecorderError: LocalizedError {
 /// `me.wav` comes from the microphone sub-device and `them.wav` from the
 /// process tap. Keeping them apart at capture time is what makes speaker
 /// attribution exact instead of a guess.
+///
+/// Reads the aggregate device through an `AudioDeviceIOProc` rather than
+/// `AVAudioEngine`. The engine normalises its input to the format it decided
+/// on: with a 3-channel aggregate device it reported `AUHAL bus1 input 3 ch`
+/// but `AUHAL bus1 output 1 ch` and delivered a mono downmix, which destroys
+/// the very separation this class exists to preserve.
 final class AggregateRecorder {
 
     let inputDeviceName: String
@@ -41,15 +50,19 @@ final class AggregateRecorder {
 
     private let tap: ProcessTap
     private let device: AggregateDevice
-    private let engine = AVAudioEngine()
 
+    private var procID: AudioDeviceIOProcID?
     private var microphoneFile: AVAudioFile?
     private var systemAudioFile: AVAudioFile?
     private var isRunning = false
 
-    /// Serialises file writes against `stop()`, which runs on the main thread
-    /// while the tap callback runs on a render thread.
-    private let writeQueue = DispatchQueue(label: "com.ryo.splitvox.recorder.write")
+    /// The IO block runs here, so file writes are already serialised and off
+    /// the real-time thread.
+    private let ioQueue = DispatchQueue(label: "com.ryo.splitvox.recorder.io")
+
+    /// Set once from the first callback, for `--probe-record` to report the
+    /// buffer layout the device actually delivers.
+    private(set) var observedBufferLayout: [Int] = []
 
     init(bundleIDs: [String], preferredInputUID: String?) throws {
         guard let input = AudioDeviceLookup.resolveInputDevice(preferredUID: preferredInputUID) else {
@@ -82,53 +95,44 @@ final class AggregateRecorder {
     func start(microphoneURL: URL, systemAudioURL: URL) throws {
         guard !isRunning else { return }
 
-        let inputNode = engine.inputNode
-
-        // Point the engine at the aggregate device before reading its format:
-        // the input node otherwise reports the system default device's layout.
-        guard let audioUnit = inputNode.audioUnit else {
-            throw AggregateRecorderError.audioUnitUnavailable
-        }
-        var deviceID = device.deviceID
-        let status = AudioUnitSetProperty(
-            audioUnit,
-            kAudioOutputUnitProperty_CurrentDevice,
-            kAudioUnitScope_Global,
-            0,
-            &deviceID,
-            UInt32(MemoryLayout<AudioDeviceID>.size)
-        )
-        guard status == noErr else {
-            throw AggregateRecorderError.deviceAssignmentFailed(status)
-        }
-
-        let inputFormat = inputNode.inputFormat(forBus: 0)
-        guard !inputFormat.isInterleaved else {
-            throw AggregateRecorderError.interleavedInputUnsupported
-        }
-        guard Int(inputFormat.channelCount) == layout.totalChannels else {
-            throw AggregateRecorderError.unexpectedInputFormat(
-                channels: Int(inputFormat.channelCount),
-                expected: layout.totalChannels
-            )
-        }
+        let sampleRate = device.nominalSampleRate
 
         microphoneFile = try Self.makeFile(
             at: microphoneURL,
-            sampleRate: inputFormat.sampleRate,
+            sampleRate: sampleRate,
             channels: layout.microphoneChannels.count
         )
         systemAudioFile = try Self.makeFile(
             at: systemAudioURL,
-            sampleRate: inputFormat.sampleRate,
+            sampleRate: sampleRate,
             channels: layout.systemAudioChannels.count
         )
 
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
-            self?.writeQueue.async { self?.write(buffer) }
+        var createdProcID: AudioDeviceIOProcID?
+        let createStatus = AudioDeviceCreateIOProcIDWithBlock(
+            &createdProcID,
+            device.deviceID,
+            ioQueue
+        ) { [weak self] _, inputData, _, _, _ in
+            self?.handle(inputData)
         }
 
-        try engine.start()
+        guard createStatus == noErr, let createdProcID else {
+            microphoneFile = nil
+            systemAudioFile = nil
+            throw AggregateRecorderError.ioProcCreationFailed(createStatus)
+        }
+        procID = createdProcID
+
+        let startStatus = AudioDeviceStart(device.deviceID, createdProcID)
+        guard startStatus == noErr else {
+            AudioDeviceDestroyIOProcID(device.deviceID, createdProcID)
+            procID = nil
+            microphoneFile = nil
+            systemAudioFile = nil
+            throw AggregateRecorderError.deviceStartFailed(startStatus)
+        }
+
         isRunning = true
     }
 
@@ -136,12 +140,15 @@ final class AggregateRecorder {
         guard isRunning else { return }
         isRunning = false
 
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+        if let procID {
+            AudioDeviceStop(device.deviceID, procID)
+            AudioDeviceDestroyIOProcID(device.deviceID, procID)
+            self.procID = nil
+        }
 
-        // Close the files only after every queued buffer has been written,
+        // Close the files only once every queued callback has finished,
         // otherwise the tail of the recording is lost.
-        writeQueue.sync {
+        ioQueue.sync {
             microphoneFile = nil
             systemAudioFile = nil
         }
@@ -150,36 +157,94 @@ final class AggregateRecorder {
         tap.invalidate()
     }
 
-    private func write(_ buffer: AVAudioPCMBuffer) {
-        guard let source = buffer.floatChannelData else { return }
-        let frameCount = Int(buffer.frameLength)
-        guard frameCount > 0 else { return }
+    /// Split one device callback into the two files.
+    ///
+    /// The aggregate device presents its sub-device and its tap as separate
+    /// buffers, and a buffer may itself hold several interleaved channels. The
+    /// two are flattened into one global channel index so `CaptureChannelLayout`
+    /// — which is expressed in device channel numbers — can address them.
+    private func handle(_ inputData: UnsafePointer<AudioBufferList>) {
+        let buffers = UnsafeMutableAudioBufferListPointer(
+            UnsafeMutablePointer(mutating: inputData)
+        )
+
+        if observedBufferLayout.isEmpty {
+            observedBufferLayout = buffers.map { Int($0.mNumberChannels) }
+        }
 
         if let file = microphoneFile {
-            writeSlice(from: source, frameCount: frameCount, channels: layout.microphoneChannels, to: file)
+            write(buffers, channels: layout.microphoneChannels, to: file)
         }
         if let file = systemAudioFile {
-            writeSlice(from: source, frameCount: frameCount, channels: layout.systemAudioChannels, to: file)
+            write(buffers, channels: layout.systemAudioChannels, to: file)
         }
     }
 
-    private func writeSlice(
-        from source: UnsafePointer<UnsafeMutablePointer<Float>>,
-        frameCount: Int,
+    private func write(
+        _ buffers: UnsafeMutableAudioBufferListPointer,
         channels: Range<Int>,
         to file: AVAudioFile
     ) {
+        let frameCount = Self.frameCount(of: buffers)
+        guard frameCount > 0 else { return }
+
         guard let out = AVAudioPCMBuffer(
             pcmFormat: file.processingFormat,
             frameCapacity: AVAudioFrameCount(frameCount)
         ), let destination = out.floatChannelData else { return }
 
         out.frameLength = AVAudioFrameCount(frameCount)
-        for (offset, channel) in channels.enumerated() {
-            destination[offset].update(from: source[channel], count: frameCount)
+
+        for (outputIndex, globalChannel) in channels.enumerated() {
+            copyChannel(globalChannel, from: buffers, frameCount: frameCount, to: destination[outputIndex])
         }
 
         try? file.write(from: out)
+    }
+
+    /// Copy one device channel, addressed by its global index across all
+    /// buffers, into a contiguous destination.
+    private func copyChannel(
+        _ globalChannel: Int,
+        from buffers: UnsafeMutableAudioBufferListPointer,
+        frameCount: Int,
+        to destination: UnsafeMutablePointer<Float>
+    ) {
+        var channelBase = 0
+
+        for buffer in buffers {
+            let channelsInBuffer = Int(buffer.mNumberChannels)
+            defer { channelBase += channelsInBuffer }
+
+            guard globalChannel >= channelBase,
+                  globalChannel < channelBase + channelsInBuffer,
+                  let raw = buffer.mData else { continue }
+
+            let localChannel = globalChannel - channelBase
+            let samples = raw.assumingMemoryBound(to: Float.self)
+            let available = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size / channelsInBuffer
+            let frames = min(frameCount, available)
+
+            for frame in 0..<frames {
+                destination[frame] = samples[frame * channelsInBuffer + localChannel]
+            }
+            if frames < frameCount {
+                for frame in frames..<frameCount { destination[frame] = 0 }
+            }
+            return
+        }
+
+        // Channel not present in this callback: emit silence rather than
+        // leaving the destination uninitialised.
+        for frame in 0..<frameCount { destination[frame] = 0 }
+    }
+
+    private static func frameCount(of buffers: UnsafeMutableAudioBufferListPointer) -> Int {
+        buffers.reduce(0) { longest, buffer in
+            let channels = max(Int(buffer.mNumberChannels), 1)
+            let frames = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size / channels
+            return max(longest, frames)
+        }
     }
 
     private static func makeFile(at url: URL, sampleRate: Double, channels: Int) throws -> AVAudioFile {
@@ -187,21 +252,25 @@ final class AggregateRecorder {
             standardFormatWithSampleRate: sampleRate,
             channels: AVAudioChannelCount(channels)
         ) else {
-            throw AggregateRecorderError.unexpectedInputFormat(channels: channels, expected: channels)
+            throw AggregateRecorderError.unsupportedSampleFormat
         }
 
-        return try AVAudioFile(
-            forWriting: url,
-            settings: format.settings,
-            commonFormat: .pcmFormatFloat32,
-            interleaved: false
-        )
+        do {
+            return try AVAudioFile(
+                forWriting: url,
+                settings: format.settings,
+                commonFormat: .pcmFormatFloat32,
+                interleaved: false
+            )
+        } catch {
+            throw AggregateRecorderError.fileCreationFailed(url, underlying: error)
+        }
     }
 
     deinit {
-        if isRunning {
-            engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
+        if let procID {
+            AudioDeviceStop(device.deviceID, procID)
+            AudioDeviceDestroyIOProcID(device.deviceID, procID)
         }
         device.invalidate()
         tap.invalidate()

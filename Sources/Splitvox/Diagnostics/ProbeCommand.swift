@@ -1,3 +1,5 @@
+import AVFAudio
+import AudioToolbox
 import CoreAudio
 import Foundation
 
@@ -105,7 +107,8 @@ enum ProbeCommand {
             }
 
             recorder.stop()
-            print("\nstopped. wrote:")
+            print("\nbuffers delivered by the device: \(recorder.observedBufferLayout)")
+            print("stopped. wrote:")
             print("  \(microphoneURL.path)")
             print("  \(systemAudioURL.path)")
 
@@ -114,6 +117,64 @@ enum ProbeCommand {
         } catch {
             print("\nFAILED: \(error.localizedDescription)")
         }
+    }
+
+    /// Core Audio reports the aggregate device as N channels while
+    /// `AVAudioEngine` reported 1. This narrows down which layer drops them:
+    /// a stale read after assignment, or the AUHAL client-side format.
+    private static func diagnoseEngineFormats(aggregateDeviceID: AudioObjectID) {
+        let engine = AVAudioEngine()
+        let inputNode = engine.inputNode
+
+        print("\nAVAudioEngine input formats")
+        print("  before assignment: \(describe(inputNode.inputFormat(forBus: 0)))")
+
+        guard let audioUnit = inputNode.audioUnit else {
+            print("  audioUnit unavailable")
+            return
+        }
+
+        var deviceID = aggregateDeviceID
+        let status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &deviceID,
+            UInt32(MemoryLayout<AudioDeviceID>.size)
+        )
+        print("  assignment status: \(status)")
+        print("  immediately after: \(describe(inputNode.inputFormat(forBus: 0)))")
+
+        Thread.sleep(forTimeInterval: 0.3)
+        print("  after 300ms:       \(describe(inputNode.inputFormat(forBus: 0)))")
+
+        // AUHAL bus 1 is the input bus. Its input scope faces the hardware and
+        // its output scope faces the client; a mismatch between them is what
+        // silently reduces the channel count.
+        printUnitFormat(audioUnit, scope: kAudioUnitScope_Input, bus: 1, label: "  AUHAL bus1 input  (hardware)")
+        printUnitFormat(audioUnit, scope: kAudioUnitScope_Output, bus: 1, label: "  AUHAL bus1 output (client)  ")
+    }
+
+    private static func printUnitFormat(
+        _ unit: AudioUnit,
+        scope: AudioUnitScope,
+        bus: AudioUnitElement,
+        label: String
+    ) {
+        var asbd = AudioStreamBasicDescription()
+        var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        let status = AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat, scope, bus, &asbd, &size)
+        if status == noErr {
+            print("\(label): \(asbd.mChannelsPerFrame) ch, \(asbd.mSampleRate) Hz")
+        } else {
+            print("\(label): unavailable (OSStatus \(status))")
+        }
+    }
+
+    private static func describe(_ format: AVAudioFormat) -> String {
+        "\(format.channelCount) ch, \(format.sampleRate) Hz"
+            + (format.isInterleaved ? ", interleaved" : ", deinterleaved")
     }
 
     private static func report(_ label: String, url: URL) {
@@ -165,8 +226,8 @@ enum ProbeCommand {
             print("  per stream:   \(aggregate.inputStreamChannelCounts)")
             print("\n  expected: microphone \(input.inputChannelCount) ch + tap \(tapChannels) ch"
                   + " = \(input.inputChannelCount + tapChannels) ch")
-            print("  -> the recorder needs to know which of these comes first;"
-                  + " that is what this output establishes.")
+
+            diagnoseEngineFormats(aggregateDeviceID: aggregate.deviceID)
         } catch {
             print("\nFAILED: \(error.localizedDescription)")
         }
