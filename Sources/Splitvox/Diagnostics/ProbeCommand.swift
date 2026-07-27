@@ -177,6 +177,59 @@ enum ProbeCommand {
             + (format.isInterleaved ? ", interleaved" : ", deinterleaved")
     }
 
+    /// `Splitvox --probe-transcribe [directory]` — transcribe an existing
+    /// `me.wav` / `them.wav` pair and print the merged Markdown.
+    ///
+    /// Runs the whole downstream half of the pipeline against a recording that
+    /// already exists, so transcription can be checked without recording again.
+    static func probeTranscribe(directory: URL) async {
+        let transcriber = Transcriber()
+
+        do {
+            let locale = try await transcriber.resolvedLocale()
+            let installed = await transcriber.isModelInstalled()
+            print("locale: \(locale.identifier)")
+            print("model installed: \(installed)")
+
+            if !installed {
+                print("downloading model…")
+                try await transcriber.ensureModelInstalled { fraction in
+                    print(String(format: "  %.0f%%", fraction * 100))
+                }
+                print("model ready")
+            }
+        } catch {
+            print("model check FAILED: \(error.localizedDescription)")
+            return
+        }
+
+        let microphoneURL = RecordingStore.microphoneFileURL(in: directory)
+        let systemAudioURL = RecordingStore.systemAudioFileURL(in: directory)
+
+        for url in [microphoneURL, systemAudioURL] where !FileManager.default.fileExists(atPath: url.path) {
+            print("missing: \(url.path)")
+            return
+        }
+
+        do {
+            print("\ntranscribing \(microphoneURL.lastPathComponent)…")
+            let me = try await transcriber.transcribe(fileURL: microphoneURL)
+            print("  \(me.count) segments")
+
+            print("transcribing \(systemAudioURL.lastPathComponent)…")
+            let them = try await transcriber.transcribe(fileURL: systemAudioURL)
+            print("  \(them.count) segments")
+
+            let merged = TranscriptMerger.merge(me: me, them: them)
+            let markdown = TranscriptMerger.markdown(for: merged)
+
+            print("\n--- transcript.md ---")
+            print(markdown.isEmpty ? "(no speech recognised)" : markdown)
+        } catch {
+            print("transcription FAILED: \(error.localizedDescription)")
+        }
+    }
+
     private static func report(_ label: String, url: URL) {
         do {
             let analysis = try AudioAnalysis.analyse(url)

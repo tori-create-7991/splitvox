@@ -14,6 +14,23 @@ if CommandLine.arguments.contains("--probe-aggregate") {
     exit(0)
 }
 
+if let index = CommandLine.arguments.firstIndex(of: "--probe-transcribe") {
+    let directory = CommandLine.arguments.dropFirst(index + 1).first.map {
+        URL(fileURLWithPath: $0)
+    } ?? FileManager.default.temporaryDirectory
+        .appendingPathComponent("splitvox-probe", isDirectory: true)
+
+    // Top-level code cannot await, so the async probe is driven to completion
+    // before the process exits.
+    let done = DispatchSemaphore(value: 0)
+    Task {
+        await ProbeCommand.probeTranscribe(directory: directory)
+        done.signal()
+    }
+    done.wait()
+    exit(0)
+}
+
 if let index = CommandLine.arguments.firstIndex(of: "--probe-record") {
     let seconds = CommandLine.arguments.dropFirst(index + 1).first.flatMap(Double.init) ?? 20
     ProbeCommand.probeRecord(
