@@ -37,6 +37,8 @@ splitvox は録音の時点で経路を分けます。相手の声はプロセ�
   載るため単一クロックで駆動され、長時間の会議でも時刻がずれません
 - **アプリ単位のキャプチャ** — 通知音や音楽が混入しません。会議アプリだけを指定できます
 - **端末内文字起こし** — Apple の SpeechAnalyzer / SpeechTranscriber を使用。日本語対応
+- **リアルタイム書き出し** — 録音しながら `transcript.md` が更新されます。停止後の待ち時間は
+  ありません。確定した結果だけを書くので、文字が後から書き換わることはありません
 - **話者ラベル付き Markdown** — 時系列でマージし、`[自分]` / `[相手]` を付与
 - **断片の自動結合** — 認識器が単語の途中で区切った断片を、話者ごとに連結します
 - **完全オフライン** — ネットワーク通信を一切行いません
@@ -81,15 +83,25 @@ SPLITVOX_SIGN_IDENTITY="任意の証明書名" bash scripts/make-app.sh
 ## 初回セットアップ
 
 1. **権限** — 初回の録音時に「マイク」と「システム音声録音」の許可を求められます。両方許可してください
-2. **会議アプリの指定** — メニューバー → 設定… でバンドルIDを確認します。既定は Chrome です
+2. **会議アプリの指定** — メニューバー → 設定… で指定します。既定は Chrome です。
+   追加方法は4通りあります。
 
-   ```
-   com.google.Chrome
-   com.google.Chrome.helper
-   ```
+   | 方法 | 用途 |
+   |---|---|
+   | **インストール済み** | `/Applications` を実際に調べて追加。**同梱ヘルパーごと入る**ので確実 |
+   | **再生中を検出** | 今音を出しているプロセスを実測して追加 |
+   | **プリセット** | Chrome / Zoom / Safari / Teams / Slack / Discord / Webex / Firefox / Edge / Arc / LINE |
+   | テキスト欄に直接入力 | 1行に1つバンドルIDを書く |
 
-   **Chrome は音声を別プロセスから再生する**ため、本体とヘルパーの両方が必要です。
-   Zoom を使う場合は `us.zoom.xos` などを追加してください
+   **多くのアプリは音声を別プロセスから再生します。** Chrome は
+   `com.google.Chrome.helper`、Zoom は `us.zoom.CptHost` などの会議ホスト、LINE は
+   `jp.naver.line.mac.LineCall` から音が出ます。本体のバンドルIDだけを指定すると
+   **無音が録れます**。ヘルパーのバンドルIDは文書化されておらずアプリのバージョンでも
+   変わるため、「インストール済み」か「再生中を検出」で追加するのが確実です。
+
+   これらのヘルパーは**通話や再生が始まるまでプロセスが存在しない**ことがあります。
+   そのため実行中でなくても設定に含めておいて構いません（音を出さないアプリは
+   無音を足すだけでコストがありません）。
 3. **マイク** — 設定… の入力デバイスから選択します。既定はシステムの既定デバイスです
 
 ## 使い方
@@ -98,8 +110,9 @@ SPLITVOX_SIGN_IDENTITY="任意の証明書名" bash scripts/make-app.sh
 
 1. 会議を開始する
 2. **⌥⌘R** を押す（またはメニューバーのアイコン → **録音を開始**）
-3. 会議が終わったら再度 **⌥⌘R**（または **録音を停止**）
-4. 完了すると Finder が開き、`transcript.md` が選択されます
+3. **この時点から `transcript.md` が随時更新されます。** 会議中でも開いて確認できます
+4. 会議が終わったら再度 **⌥⌘R**（または **録音を停止**）
+5. Finder が開き、`transcript.md` が選択されます
 
 メニューバーのアイコンは状態を表します。
 
@@ -127,6 +140,9 @@ SPLITVOX_SIGN_IDENTITY="任意の証明書名" bash scripts/make-app.sh
 意図した音声が録れない場合に、どの段階で失敗しているかを切り分けられます。
 
 ```bash
+# Core Audio に見えているプロセスとインストール済みアプリのバンドルIDを一覧
+./Splitvox.app/Contents/MacOS/Splitvox --list-apps
+
 # 音を出しているアプリのバンドルIDを実測する（音を鳴らしながら実行）
 swift Tools/audio-process-watch.swift 60
 
@@ -139,9 +155,15 @@ swift Tools/audio-process-watch.swift 60
 # 実際に録音して、ファイルごとの秒単位の音量を出す
 ./Splitvox.app/Contents/MacOS/Splitvox --probe-record 20
 
-# 録音から文字起こしまで通す
+# 録音から文字起こしまで通す（停止後に一括で処理）
 ./Splitvox.app/Contents/MacOS/Splitvox --probe-full 20
+
+# 録音しながら文字起こしする経路を検証する（本番と同じ経路）
+./Splitvox.app/Contents/MacOS/Splitvox --probe-live 25
 ```
+
+`--probe-live` は各段の件数を出します。`appended` が音声の到着、`yielded` が変換後の
+投入、`results` が認識結果です。どこで 0 になるかで原因が一意に決まります。
 
 `them.wav` が無音になる場合は、`audio-process-watch` で「音を出しているのに設定に含まれていない」
 バンドルIDを探して設定に追加してください。
@@ -167,7 +189,8 @@ swift Tools/audio-process-watch.swift 60
 - **相手側の話者分離は行いません。** 会議相手が複数いても全員が `[相手]` になります。
   「自分 vs 相手」の2分割までです
 - **要約しません。** `transcript.md` を任意の AI に渡してください
-- **リアルタイム表示はありません。** 録音を停止してから文字起こしします
+- **画面表示はありません。** 文字起こしはリアルタイムで `transcript.md` に書かれますが、
+  アプリ内に表示するウィンドウはありません。ファイルを開いて見てください
 - 固有名詞や英単語の認識精度は完璧ではありません（`GDP` → `GDB` など）
 - Zoom / Teams は設定でバンドルIDを追加すれば動作する想定ですが、検証していません
 
@@ -180,7 +203,10 @@ swift Tools/audio-process-watch.swift 60
 | | `Core/AggregateDevice.swift` | タップとマイクを単一クロックに載せる |
 | | `Core/AggregateRecorder.swift` | 2ファイルへの書き分け |
 | | `Core/AudioProcessLookup.swift` / `AudioDeviceLookup.swift` | プロセス・デバイスの解決 |
-| 文字起こし | `Core/Transcriber.swift` | SpeechAnalyzer のラッパー |
+| | `Core/InstalledAppLookup.swift` | インストール済みアプリと同梱ヘルパーの探索 |
+| 文字起こし | `Core/LiveTranscriber.swift` | 録音中のストリーミング認識 |
+| | `Core/Transcriber.swift` | ファイルからの一括認識（フォールバック） |
+| | `Core/TranscriptAccumulator.swift` | 逐次到着する結果の蓄積と重複排除 |
 | 整形 | `Core/TranscriptMerger.swift` | 結合・マージ・Markdown 生成 |
 | | `Core/CaptureChannelLayout.swift` | チャンネル配置の解決 |
 | 状態 | `Core/RecordingSession.swift` | 録音ライフサイクル |

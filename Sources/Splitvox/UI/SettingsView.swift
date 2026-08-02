@@ -8,7 +8,9 @@ struct SettingsView: View {
     @State private var bundleIDText: String = ""
     @State private var selectedInputUID: String = SettingsView.systemDefaultTag
     @State private var inputDevices: [AudioInputDevice] = []
+    @State private var installedApps: [InstalledApp] = []
     @State private var savedMessage: String?
+    @State private var detectionMessage: String?
 
     /// Sentinel for "follow the system default", which is stored as nil.
     private static let systemDefaultTag = ""
@@ -31,6 +33,33 @@ struct SettingsView: View {
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+                HStack {
+                    Menu("プリセット") {
+                        ForEach(Config.knownMeetingApps) { app in
+                            Button(app.name) { addBundleIDs(app.bundleIDs) }
+                        }
+                    }
+                    .frame(maxWidth: 110)
+
+                    // Reads /Applications, so anything installed can be added
+                    // without knowing its bundle ID. Nested apps come along,
+                    // which is where several apps actually play audio from.
+                    Menu("インストール済み") {
+                        ForEach(installedApps) { app in
+                            Button(helperLabel(for: app)) { addBundleIDs(app.allBundleIDs) }
+                        }
+                    }
+                    .frame(maxWidth: 140)
+
+                    Button("再生中を検出") { detectPlayingApps() }
+                }
+
+                if let detectionMessage {
+                    Text(detectionMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section("マイク") {
@@ -75,6 +104,7 @@ struct SettingsView: View {
     private func load() {
         bundleIDText = store.meetingBundleIDs.joined(separator: "\n")
         inputDevices = AudioDeviceLookup.availableInputDevices()
+        installedApps = InstalledAppLookup.scan()
 
         // A device that has been unplugged since it was chosen falls back to
         // the system default rather than showing a blank selection.
@@ -82,6 +112,50 @@ struct SettingsView: View {
         selectedInputUID = inputDevices.contains { $0.uid == stored }
             ? (stored ?? Self.systemDefaultTag)
             : Self.systemDefaultTag
+    }
+
+    /// Shows how many extra bundle IDs come with an app, since that is the part
+    /// users cannot guess (LINE calls, Zoom meeting hosts, browser helpers).
+    private func helperLabel(for app: InstalledApp) -> String {
+        app.helperBundleIDs.isEmpty
+            ? app.name
+            : "\(app.name)  (+\(app.helperBundleIDs.count))"
+    }
+
+    private func addBundleIDs(_ ids: [String]) {
+        var current = bundleIDText
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+
+        let added = ids.filter { !current.contains($0) }
+        guard !added.isEmpty else {
+            detectionMessage = "すでに追加されています"
+            return
+        }
+
+        current.append(contentsOf: added)
+        bundleIDText = current.joined(separator: "\n")
+        detectionMessage = "\(added.count) 件追加しました（保存が必要です）"
+    }
+
+    /// Reads which processes are producing output right now.
+    ///
+    /// The preset list is partly guesswork — helper-process bundle IDs are not
+    /// documented and differ per app version. Measuring the running system is
+    /// the only reliable way to get them, so it is offered directly here.
+    private func detectPlayingApps() {
+        let playing = Set(AudioProcessLookup.bundleIDsProducingOutput())
+            .subtracting(["com.ryo.splitvox"])
+            .sorted()
+
+        guard !playing.isEmpty else {
+            detectionMessage = "音を出しているアプリが見つかりません。会議やビデオを再生した状態で押してください。"
+            return
+        }
+
+        addBundleIDs(playing)
+        detectionMessage = "検出: \(playing.joined(separator: ", "))"
     }
 
     private func save() {

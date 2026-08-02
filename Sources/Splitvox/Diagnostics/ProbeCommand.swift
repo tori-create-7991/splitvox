@@ -177,6 +177,157 @@ enum ProbeCommand {
             + (format.isInterleaved ? ", interleaved" : ", deinterleaved")
     }
 
+    /// `Splitvox --list-apps` — every process Core Audio knows about, plus the
+    /// applications installed on this machine and their bundle IDs.
+    ///
+    /// Answers the question the settings screen keeps raising: "what do I put
+    /// in the bundle ID list for app X". Helper-process IDs are undocumented
+    /// and differ per app, so they have to be read off the running system.
+    static func listApps(configured: [String]) {
+        let configuredSet = Set(configured)
+
+        print("=== Core Audio に登録されているプロセス ===")
+        let objects = AudioProcessLookup.allProcessObjectIDs()
+        var rows: [(bundle: String, output: Bool)] = []
+        for object in objects {
+            guard let bundle = AudioProcessLookup.bundleID(of: object), !bundle.isEmpty else { continue }
+            rows.append((bundle, AudioProcessLookup.isProducingOutput(object)))
+        }
+
+        for row in rows.sorted(by: { $0.bundle < $1.bundle }) {
+            let mark = configuredSet.contains(row.bundle) ? "[設定済]" : "        "
+            let playing = row.output ? "  <- 再生中" : ""
+            print("  \(mark) \(row.bundle)\(playing)")
+        }
+
+        print("\n=== インストール済みアプリ ===")
+        for app in InstalledAppLookup.scan() {
+            let ids = app.allBundleIDs
+            let covered = ids.allSatisfy { configuredSet.contains($0) }
+            print("  \(covered ? "[設定済]" : "        ") \(app.name)")
+            for id in ids {
+                print("             \(id)")
+            }
+        }
+
+        print("\n設定に貼る場合は上記のバンドルIDを1行に1つ書いてください。")
+    }
+
+    /// Collects live segments from both transcribers, which deliver on
+    /// different tasks, so the accumulator needs guarding.
+    private final class LiveCollector: @unchecked Sendable {
+        private let lock = NSLock()
+        private var accumulator = TranscriptAccumulator()
+
+        func add(_ segment: TranscriptSegment, from speaker: Speaker) {
+            lock.lock()
+            defer { lock.unlock() }
+            accumulator.add(segment, from: speaker)
+        }
+
+        var snapshot: (markdown: String, count: Int) {
+            lock.lock()
+            defer { lock.unlock() }
+            return (accumulator.markdown(), accumulator.me.count + accumulator.them.count)
+        }
+    }
+
+    /// `Splitvox --probe-live [seconds]` — transcribe while recording, printing
+    /// the transcript as it grows.
+    ///
+    /// Exercises the live path end to end, which the file-based probes do not
+    /// touch at all.
+    static func probeLive(
+        bundleIDs: [String],
+        preferredInputUID: String?,
+        seconds: TimeInterval,
+        outputDirectory: URL
+    ) async {
+        do {
+            try FileManager.default.createDirectory(
+                at: outputDirectory,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+
+            let recorder = try AggregateRecorder(
+                bundleIDs: bundleIDs,
+                preferredInputUID: preferredInputUID
+            )
+            guard let microphoneFormat = recorder.microphoneFormat,
+                  let systemAudioFormat = recorder.systemAudioFormat else {
+                print("could not derive capture formats")
+                return
+            }
+
+            print("input device: \(recorder.inputDeviceName)")
+            print("mic format:   \(microphoneFormat.channelCount) ch @ \(microphoneFormat.sampleRate) Hz")
+            print("tap format:   \(systemAudioFormat.channelCount) ch @ \(systemAudioFormat.sampleRate) Hz")
+
+            let collector = LiveCollector()
+            let microphone = LiveTranscriber()
+            let systemAudio = LiveTranscriber()
+
+            microphone.onSegment = { collector.add($0, from: .me) }
+            systemAudio.onSegment = { collector.add($0, from: .them) }
+
+            print("\nstarting live transcribers…")
+            try await microphone.start(sourceFormat: microphoneFormat)
+            try await systemAudio.start(sourceFormat: systemAudioFormat)
+
+            if let format = microphone.analyzerFormat {
+                print("analyzer wants: \(format.channelCount) ch @ \(format.sampleRate) Hz"
+                      + (format == microphoneFormat ? " (no conversion)" : " (converting)"))
+            }
+
+            recorder.onMicrophoneBuffer = { microphone.append($0) }
+            recorder.onSystemAudioBuffer = { systemAudio.append($0) }
+
+            try recorder.start(
+                microphoneURL: RecordingStore.microphoneFileURL(in: outputDirectory),
+                systemAudioURL: RecordingStore.systemAudioFileURL(in: outputDirectory)
+            )
+
+            print("recording \(Int(seconds))s — speak, and play audio in the meeting app\n")
+
+            var lastCount = -1
+            for remaining in stride(from: Int(seconds), through: 1, by: -1) {
+                let snapshot = collector.snapshot
+                if snapshot.count != lastCount {
+                    lastCount = snapshot.count
+                    print("  [\(remaining)s left] \(snapshot.count) segments so far")
+                }
+                // Task.sleep, not Thread.sleep: blocking the cooperative pool
+                // here would stall the transcribers running on it.
+                try? await Task.sleep(for: .seconds(1))
+            }
+
+            recorder.stop()
+            await microphone.finish()
+            await systemAudio.finish()
+
+            let final = collector.snapshot
+            print("\nfinal: \(final.count) segments")
+
+            // Locates a silent failure: no appends means the audio never
+            // reached the transcriber, no yields means conversion dropped it,
+            // and results without finals means recognition ran but never
+            // committed anything.
+            for (label, transcriber) in [("mic", microphone), ("tap", systemAudio)] {
+                let s = transcriber.stats
+                print("  \(label): appended=\(s.appended) yielded=\(s.yielded) "
+                      + "convFail=\(s.conversionFailures) "
+                      + "results=\(s.resultsReceived) final=\(s.finalResults)"
+                      + (s.streamError.map { " error=\($0)" } ?? ""))
+            }
+
+            print("\n--- transcript.md ---")
+            print(final.markdown.isEmpty ? "(no speech recognised)" : final.markdown)
+        } catch {
+            print("\nFAILED: \(error.localizedDescription)")
+        }
+    }
+
     /// `Splitvox --probe-full [seconds]` — record, then transcribe, in one run.
     ///
     /// The end-to-end path a real meeting takes, driven from the command line
@@ -234,6 +385,24 @@ enum ProbeCommand {
         for url in [microphoneURL, systemAudioURL] where !FileManager.default.fileExists(atPath: url.path) {
             print("missing: \(url.path)")
             return
+        }
+
+        // Levels first: a file with no speech in it and a file the recogniser
+        // failed on both produce zero segments, and only the level tells them
+        // apart.
+        for url in [microphoneURL, systemAudioURL] {
+            if let analysis = try? AudioAnalysis.analyse(url) {
+                // Levels only, deliberately without a "was anyone speaking"
+                // verdict. Both a steady room tone and someone talking without
+                // pause produce a small average-to-peak gap, because the peak
+                // here is the loudest one-second window, so no threshold on
+                // these numbers separates the two. They still answer the
+                // question that matters — whether the file is silent.
+                let average = AudioAnalysis.decibels(analysis.overallRMS)
+                let peak = AudioAnalysis.decibels(analysis.peakRMS)
+                print(String(format: "%@: 平均 %.1f / ピーク %.1f dBFS",
+                             url.lastPathComponent, average, peak))
+            }
         }
 
         do {

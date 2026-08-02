@@ -64,6 +64,33 @@ final class AggregateRecorder {
     /// buffer layout the device actually delivers.
     private(set) var observedBufferLayout: [Int] = []
 
+    /// Live taps on each side's audio, for transcribing while recording.
+    ///
+    /// Separate from the files rather than replacing them: if transcription
+    /// fails or the model stalls, the audio is still on disk and the session
+    /// can be transcribed again afterwards.
+    var onMicrophoneBuffer: ((AVAudioPCMBuffer) -> Void)?
+    var onSystemAudioBuffer: ((AVAudioPCMBuffer) -> Void)?
+
+    /// Formats the live buffers will be delivered in.
+    ///
+    /// Derived from the device rather than read back from the open files, so a
+    /// transcriber can be started *before* recording begins. Starting it after
+    /// would drop the first seconds of the meeting.
+    var microphoneFormat: AVAudioFormat? {
+        AVAudioFormat(
+            standardFormatWithSampleRate: device.nominalSampleRate,
+            channels: AVAudioChannelCount(layout.microphoneChannels.count)
+        )
+    }
+
+    var systemAudioFormat: AVAudioFormat? {
+        AVAudioFormat(
+            standardFormatWithSampleRate: device.nominalSampleRate,
+            channels: AVAudioChannelCount(layout.systemAudioChannels.count)
+        )
+    }
+
     init(bundleIDs: [String], preferredInputUID: String?) throws {
         guard let input = AudioDeviceLookup.resolveInputDevice(preferredUID: preferredInputUID) else {
             throw AggregateRecorderError.noInputDevice
@@ -107,6 +134,7 @@ final class AggregateRecorder {
             sampleRate: sampleRate,
             channels: layout.systemAudioChannels.count
         )
+
 
         var createdProcID: AudioDeviceIOProcID?
         let createStatus = AudioDeviceCreateIOProcIDWithBlock(
@@ -173,17 +201,18 @@ final class AggregateRecorder {
         }
 
         if let file = microphoneFile {
-            write(buffers, channels: layout.microphoneChannels, to: file)
+            write(buffers, channels: layout.microphoneChannels, to: file, live: onMicrophoneBuffer)
         }
         if let file = systemAudioFile {
-            write(buffers, channels: layout.systemAudioChannels, to: file)
+            write(buffers, channels: layout.systemAudioChannels, to: file, live: onSystemAudioBuffer)
         }
     }
 
     private func write(
         _ buffers: UnsafeMutableAudioBufferListPointer,
         channels: Range<Int>,
-        to file: AVAudioFile
+        to file: AVAudioFile,
+        live: ((AVAudioPCMBuffer) -> Void)?
     ) {
         let frameCount = Self.frameCount(of: buffers)
         guard frameCount > 0 else { return }
@@ -199,7 +228,10 @@ final class AggregateRecorder {
             copyChannel(globalChannel, from: buffers, frameCount: frameCount, to: destination[outputIndex])
         }
 
+        // Write to disk first: the file is the durable record, and a slow or
+        // failing transcriber must not be able to cost us the audio.
         try? file.write(from: out)
+        live?(out)
     }
 
     /// Copy one device channel, addressed by its global index across all

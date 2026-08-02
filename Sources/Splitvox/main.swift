@@ -1,6 +1,11 @@
 import AppKit
 
 // Diagnostics run headless and exit; they must not start the menu bar app.
+if CommandLine.arguments.contains("--list-apps") {
+    ProbeCommand.listApps(configured: PreferenceStore().meetingBundleIDs)
+    exit(0)
+}
+
 if CommandLine.arguments.contains("--probe-tap") {
     ProbeCommand.run(bundleIDs: Config.defaultMeetingBundleIDs)
     exit(0)
@@ -11,6 +16,23 @@ if CommandLine.arguments.contains("--probe-aggregate") {
         bundleIDs: Config.defaultMeetingBundleIDs,
         preferredInputUID: nil
     )
+    exit(0)
+}
+
+if let index = CommandLine.arguments.firstIndex(of: "--probe-live") {
+    let seconds = CommandLine.arguments.dropFirst(index + 1).first.flatMap(Double.init) ?? 20
+    let done = DispatchSemaphore(value: 0)
+    Task {
+        await ProbeCommand.probeLive(
+            bundleIDs: Config.defaultMeetingBundleIDs,
+            preferredInputUID: nil,
+            seconds: seconds,
+            outputDirectory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("splitvox-live", isDirectory: true)
+        )
+        done.signal()
+    }
+    done.wait()
     exit(0)
 }
 

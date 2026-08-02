@@ -14,6 +14,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var sessionDirectory: URL?
     private var lastTranscriptURL: URL?
 
+    private var liveMicrophone: LiveTranscriber?
+    private var liveSystemAudio: LiveTranscriber?
+    private var accumulator = TranscriptAccumulator()
+
     private let preferences = PreferenceStore()
     private let store = RecordingStore(baseDirectory: RecordingStore.defaultBaseDirectory())
 
@@ -192,20 +196,81 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 bundleIDs: settings.meetingBundleIDs,
                 preferredInputUID: settings.inputDeviceUID
             )
+
+            accumulator = TranscriptAccumulator()
+            sessionDirectory = directory
+            lastTranscriptURL = RecordingStore.transcriptFileURL(in: directory)
+
+            // Started before recording so the opening seconds are transcribed
+            // too. A failure here leaves recording intact: the audio files are
+            // still written and can be transcribed afterwards.
+            await startLiveTranscription(for: newRecorder)
+
             try newRecorder.start(
                 microphoneURL: RecordingStore.microphoneFileURL(in: directory),
                 systemAudioURL: RecordingStore.systemAudioFileURL(in: directory)
             )
 
             recorder = newRecorder
-            sessionDirectory = directory
             _ = session.start()
         } catch {
+            tearDownLiveTranscription()
             session.fail(error.localizedDescription)
             showMessage("録音を開始できませんでした。\n\n\(error.localizedDescription)")
         }
 
         updateStatusItem()
+    }
+
+    private func startLiveTranscription(for recorder: AggregateRecorder) async {
+        guard let microphoneFormat = recorder.microphoneFormat,
+              let systemAudioFormat = recorder.systemAudioFormat else { return }
+
+        do {
+            let microphone = LiveTranscriber()
+            let systemAudio = LiveTranscriber()
+
+            microphone.onSegment = { [weak self] segment in
+                Task { @MainActor in self?.appendSegment(segment, from: .me) }
+            }
+            systemAudio.onSegment = { [weak self] segment in
+                Task { @MainActor in self?.appendSegment(segment, from: .them) }
+            }
+
+            try await microphone.start(sourceFormat: microphoneFormat)
+            try await systemAudio.start(sourceFormat: systemAudioFormat)
+
+            recorder.onMicrophoneBuffer = { [weak microphone] in microphone?.append($0) }
+            recorder.onSystemAudioBuffer = { [weak systemAudio] in systemAudio?.append($0) }
+
+            liveMicrophone = microphone
+            liveSystemAudio = systemAudio
+        } catch {
+            // Recording still proceeds; the transcript is produced from the
+            // files at stop instead.
+            tearDownLiveTranscription()
+            NSLog("[Splitvox] live transcription unavailable: \(error.localizedDescription)")
+        }
+    }
+
+    private func tearDownLiveTranscription() {
+        recorder?.onMicrophoneBuffer = nil
+        recorder?.onSystemAudioBuffer = nil
+        liveMicrophone = nil
+        liveSystemAudio = nil
+    }
+
+    /// Rewrite the whole transcript rather than appending: coalescing can merge
+    /// a new fragment into the previous line, so the file is only correct when
+    /// rendered as a whole. It stays small enough that this is free.
+    private func appendSegment(_ segment: TranscriptSegment, from speaker: Speaker) {
+        guard accumulator.add(segment, from: speaker) else { return }
+        writeTranscript()
+    }
+
+    private func writeTranscript() {
+        guard let url = lastTranscriptURL, !accumulator.isEmpty else { return }
+        try? accumulator.markdown().write(to: url, atomically: true, encoding: .utf8)
     }
 
     @objc private func stopRecording() {
@@ -220,6 +285,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func finishSession(directory: URL) async {
+        // Drain whatever the live transcribers still hold before deciding
+        // whether the transcript is usable.
+        if liveMicrophone != nil || liveSystemAudio != nil {
+            await liveMicrophone?.finish()
+            await liveSystemAudio?.finish()
+            tearDownLiveTranscription()
+
+            if !accumulator.isEmpty {
+                writeTranscript()
+                _ = session.finish()
+                updateStatusItem()
+
+                if let url = lastTranscriptURL {
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                }
+                return
+            }
+            // Nothing recognised live — fall through and try the files, which
+            // distinguishes "silence" from "the live path failed".
+        }
+
+        await transcribeFromFiles(directory: directory)
+    }
+
+    private func transcribeFromFiles(directory: URL) async {
         let transcriber = Transcriber()
 
         do {
