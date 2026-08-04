@@ -11,6 +11,7 @@ struct SettingsView: View {
     @State private var installedApps: [InstalledApp] = []
     @State private var savedMessage: String?
     @State private var detectionMessage: String?
+    @State private var autoRecordEnabled = false
 
     /// Sentinel for "follow the system default", which is stored as nil.
     private static let systemDefaultTag = ""
@@ -75,6 +76,24 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("自動記録") {
+                Toggle("会議を検出したら自動で録音する", isOn: $autoRecordEnabled)
+                    .onChange(of: autoRecordEnabled) { _, value in
+                        store.autoRecordEnabled = value
+                    }
+
+                Text(
+                    "ヘッドセット（内蔵マイク以外が既定の入力）が有効で、かつ上記のアプリが"
+                        + "音を出しているときに開始します。動画の再生も記録されます。"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                Text("条件が約5秒続いたら開始し、約30秒途切れたら停止します。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("ショートカット") {
                 KeyboardShortcuts.Recorder("録音の開始 / 停止", name: .toggleRecording)
 
@@ -105,6 +124,7 @@ struct SettingsView: View {
         bundleIDText = store.meetingBundleIDs.joined(separator: "\n")
         inputDevices = AudioDeviceLookup.availableInputDevices()
         installedApps = InstalledAppLookup.scan()
+        autoRecordEnabled = store.autoRecordEnabled
 
         // A device that has been unplugged since it was chosen falls back to
         // the system default rather than showing a blank selection.

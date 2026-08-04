@@ -196,6 +196,42 @@ enum ProbeCommand {
             + (format.isInterleaved ? ", interleaved" : ", deinterleaved")
     }
 
+    /// `Splitvox --probe-detect [seconds]` — watch the meeting-detection signal
+    /// without recording anything.
+    ///
+    /// Lets the trigger be tuned against real usage — a real meeting, and a
+    /// video that must *not* fire it — before trusting it to start recordings
+    /// unattended.
+    static func probeDetect(bundleIDs: [String], seconds: TimeInterval) {
+        print("watching for \(Int(seconds))s — ヘッドセットの抜き差しで試してください")
+        print("現在の既定入力: \(AudioDeviceLookup.defaultInputName() ?? "(不明)")")
+        print("判定: ヘッドセット(内蔵マイク以外が既定入力) かつ 設定アプリが再生中\n")
+
+        var trigger = MeetingTrigger()
+        var lastState: Bool?
+        let started = ProcessInfo.processInfo.systemUptime
+
+        while ProcessInfo.processInfo.systemUptime - started < seconds {
+            let now = ProcessInfo.processInfo.systemUptime
+            let sample = MeetingDetector.sample(meetingBundleIDs: bundleIDs)
+            let action = trigger.observe(meetingDetected: sample.shouldRecord, at: now)
+
+            if sample.shouldRecord != lastState || action != .none {
+                lastState = sample.shouldRecord
+                let elapsed = Int(now - started)
+                let verdict = sample.shouldRecord ? "RECORD " : "-      "
+                print("[\(elapsed)s] \(verdict)  ヘッドセット: \(sample.headsetActive ? "○" : "×")"
+                      + "  |  再生: \(sample.playing.joined(separator: ", "))")
+                if action != .none {
+                    print("        -> \(action == .start ? "録音を開始する条件を満たしました" : "停止条件を満たしました")")
+                }
+            }
+
+            Thread.sleep(forTimeInterval: 1)
+        }
+        print("\n終了。")
+    }
+
     /// `Splitvox --list-apps` — every process Core Audio knows about, plus the
     /// applications installed on this machine and their bundle IDs.
     ///

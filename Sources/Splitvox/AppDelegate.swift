@@ -18,6 +18,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var liveSystemAudio: LiveTranscriber?
     private var accumulator = TranscriptAccumulator()
 
+    private var detectionTimer: Timer?
+    private var trigger = MeetingTrigger()
+    /// Monotonic clock for the trigger. Wall time would jump on a clock change
+    /// or a wake from sleep and could fire a start or stop spuriously.
+    private var uptime: TimeInterval { ProcessInfo.processInfo.systemUptime }
+
     private let preferences = PreferenceStore()
     private let store = RecordingStore(baseDirectory: RecordingStore.defaultBaseDirectory())
 
@@ -27,6 +33,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         KeyboardShortcuts.onKeyUp(for: .toggleRecording) { [weak self] in
             self?.toggleRecording()
+        }
+
+        startDetectionTimer()
+    }
+
+    // MARK: - Automatic recording
+
+    /// Poll for meeting conditions. Cheap enough to leave running: it reads
+    /// process properties, with no audio device involved.
+    private func startDetectionTimer() {
+        detectionTimer?.invalidate()
+        detectionTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.sampleForMeeting() }
+        }
+    }
+
+    private func sampleForMeeting() {
+        guard preferences.autoRecordEnabled else { return }
+        // Transcription still running from a previous meeting; starting another
+        // recording on top of it would interleave two sessions.
+        guard session.state != .transcribing else { return }
+
+        let sample = MeetingDetector.sample(meetingBundleIDs: preferences.meetingBundleIDs)
+
+        switch trigger.observe(meetingDetected: sample.shouldRecord, at: uptime) {
+        case .none:
+            break
+        case .start:
+            guard session.state == .idle else { return }
+            startRecording()
+        case .stop:
+            guard session.state == .recording else { return }
+            stopRecording()
         }
     }
 
@@ -213,6 +252,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             recorder = newRecorder
             _ = session.start()
+            // Tell the trigger, so a manual start is not followed by an
+            // automatic one, and so the stop countdown is measured from here.
+            trigger.recordingBecameActive(at: uptime)
         } catch {
             tearDownLiveTranscription()
             session.fail(error.localizedDescription)
@@ -295,6 +337,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if !accumulator.isEmpty {
                 writeTranscript()
                 _ = session.finish()
+                trigger.recordingBecameInactive(at: uptime)
                 updateStatusItem()
 
                 warnIfFarSideSilent(directory: directory)
@@ -332,11 +375,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             lastTranscriptURL = transcriptURL
             _ = session.finish()
+            trigger.recordingBecameInactive(at: uptime)
             updateStatusItem()
 
             NSWorkspace.shared.activateFileViewerSelecting([transcriptURL])
         } catch {
             session.fail(error.localizedDescription)
+            // Without this the trigger still believes a recording is running
+            // and would never start the next meeting.
+            trigger.recordingBecameInactive(at: uptime)
             updateStatusItem()
             // The audio is still on disk, so say where it is rather than
             // letting the recording look lost.

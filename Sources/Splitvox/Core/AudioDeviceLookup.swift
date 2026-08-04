@@ -92,6 +92,25 @@ enum AudioDeviceLookup {
             .filter { $0.inputChannelCount > 0 }
     }
 
+    /// UID of the Mac's own microphone. Anything else selected as the default
+    /// input means an external mic — a headset, earbuds, or a virtual device.
+    static let builtInMicrophoneUID = "BuiltInMicrophoneDevice"
+
+    /// Whether the default input is something other than the built-in mic.
+    ///
+    /// Used as the signal that a call is about to happen: putting on a headset
+    /// is a deliberate act that precedes a meeting, and unlike watching for
+    /// microphone use it does not depend on which application is running.
+    static func isExternalInputActive() -> Bool {
+        guard let device = defaultInputDeviceID(), let uid = uid(of: device) else { return false }
+        return uid != builtInMicrophoneUID
+    }
+
+    /// Name of the current default input, for showing in diagnostics.
+    static func defaultInputName() -> String? {
+        defaultInputDeviceID().flatMap(name(of:))
+    }
+
     /// The device to record the local speaker from: the user's choice when it
     /// is still present, otherwise the system default.
     static func resolveInputDevice(preferredUID: String?) -> AudioInputDevice? {

@@ -70,4 +70,25 @@ enum AudioProcessLookup {
             .filter(isProducingOutput)
             .compactMap(bundleID(of:))
     }
+
+    static func isConsumingInput(_ object: AudioObjectID) -> Bool {
+        var addr = address(kAudioProcessPropertyIsRunningInput)
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        var value: UInt32 = 0
+        guard AudioObjectGetPropertyData(object, &addr, 0, nil, &size, &value) == noErr else {
+            return false
+        }
+        return value != 0
+    }
+
+    /// Bundle IDs currently capturing from a microphone.
+    ///
+    /// This is what separates a meeting from watching a video: both play audio,
+    /// but only a call also holds the microphone open.
+    static func bundleIDsConsumingInput(excluding excluded: Set<String> = []) -> [String] {
+        allProcessObjectIDs()
+            .filter(isConsumingInput)
+            .compactMap(bundleID(of:))
+            .filter { !excluded.contains($0) }
+    }
 }

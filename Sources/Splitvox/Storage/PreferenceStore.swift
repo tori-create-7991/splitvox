@@ -7,6 +7,7 @@ import Foundation
 struct Preferences: Equatable {
     let meetingBundleIDs: [String]
     let inputDeviceUID: String?
+    let autoRecordEnabled: Bool
 }
 
 /// User-changeable settings. `Config` holds the values fixed at build time.
@@ -19,6 +20,7 @@ struct PreferenceStore {
     private enum Key {
         static let meetingBundleIDs = "meetingBundleIDs"
         static let inputDeviceUID = "inputDeviceUID"
+        static let autoRecordEnabled = "autoRecordEnabled"
     }
 
     private let defaults: UserDefaults
@@ -59,8 +61,21 @@ struct PreferenceStore {
         }
     }
 
+    /// Start and stop recording automatically when a meeting is detected.
+    ///
+    /// Off by default: this starts recording without the user asking, so it is
+    /// opted into rather than sprung on someone.
+    var autoRecordEnabled: Bool {
+        get { defaults.bool(forKey: Key.autoRecordEnabled) }
+        nonmutating set { defaults.set(newValue, forKey: Key.autoRecordEnabled) }
+    }
+
     var current: Preferences {
-        Preferences(meetingBundleIDs: meetingBundleIDs, inputDeviceUID: inputDeviceUID)
+        Preferences(
+            meetingBundleIDs: meetingBundleIDs,
+            inputDeviceUID: inputDeviceUID,
+            autoRecordEnabled: autoRecordEnabled
+        )
     }
 
     private static func clean(_ values: [String]) -> [String] {
