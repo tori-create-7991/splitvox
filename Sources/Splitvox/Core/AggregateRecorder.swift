@@ -64,6 +64,11 @@ final class AggregateRecorder {
     /// buffer layout the device actually delivers.
     private(set) var observedBufferLayout: [Int] = []
 
+    /// Surfaced rather than swallowed: a file that silently fails to write
+    /// leaves a zero-length recording that looks like silence.
+    private(set) var writeFailures = 0
+    private(set) var firstWriteError: String?
+
     /// Live taps on each side's audio, for transcribing while recording.
     ///
     /// Separate from the files rather than replacing them: if transcription
@@ -230,7 +235,14 @@ final class AggregateRecorder {
 
         // Write to disk first: the file is the durable record, and a slow or
         // failing transcriber must not be able to cost us the audio.
-        try? file.write(from: out)
+        do {
+            try file.write(from: out)
+        } catch {
+            if firstWriteError == nil {
+                firstWriteError = error.localizedDescription
+            }
+            writeFailures += 1
+        }
         live?(out)
     }
 
@@ -279,21 +291,25 @@ final class AggregateRecorder {
         }
     }
 
+    /// Create the on-disk recording as 16-bit PCM.
+    ///
+    /// 32-bit float costs about 2 GB per hour across both tracks, which does
+    /// not survive routine use; 16-bit halves that with no audible loss for
+    /// speech. AAC would be far smaller still, but `AVAudioFile` accepted the
+    /// writes and then produced zero-length files — the encoder never flushed —
+    /// so it is not trustworthy here.
+    ///
+    /// `commonFormat: .pcmFormatFloat32` still describes the buffers handed to
+    /// `write(from:)`; AVAudioFile converts them to 16-bit on the way to disk.
     private static func makeFile(at url: URL, sampleRate: Double, channels: Int) throws -> AVAudioFile {
-        guard let format = AVAudioFormat(
-            standardFormatWithSampleRate: sampleRate,
-            channels: AVAudioChannelCount(channels)
-        ) else {
-            throw AggregateRecorderError.unsupportedSampleFormat
-        }
-
-        // A WAV file is always interleaved on disk, so passing this key through
-        // from the in-memory format makes CoreAudio log
-        // "Audio files cannot be non-interleaved. Ignoring setting…" on every
-        // recording. The `interleaved: false` argument below is separate: it
-        // describes the buffers handed to `write(from:)`, not the file.
-        var settings = format.settings
-        settings.removeValue(forKey: AVLinearPCMIsNonInterleaved)
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: sampleRate,
+            AVNumberOfChannelsKey: channels,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false
+        ]
 
         do {
             return try AVAudioFile(

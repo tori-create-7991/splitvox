@@ -72,9 +72,13 @@ if let index = CommandLine.arguments.firstIndex(of: "--probe-transcribe") {
 
 if let index = CommandLine.arguments.firstIndex(of: "--probe-record") {
     let seconds = CommandLine.arguments.dropFirst(index + 1).first.flatMap(Double.init) ?? 20
+    // `--input <uid>` pins the microphone, so a probe is not at the mercy of
+    // whatever macOS currently considers the default input.
+    let inputUID = CommandLine.arguments.firstIndex(of: "--input")
+        .flatMap { CommandLine.arguments.dropFirst($0 + 1).first }
     ProbeCommand.probeRecord(
         bundleIDs: Config.defaultMeetingBundleIDs,
-        preferredInputUID: nil,
+        preferredInputUID: inputUID,
         seconds: seconds,
         outputDirectory: FileManager.default.temporaryDirectory
             .appendingPathComponent("splitvox-probe", isDirectory: true)

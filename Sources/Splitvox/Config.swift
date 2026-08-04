@@ -6,14 +6,38 @@ enum Config {
 
     /// Applications whose output audio is captured by the process tap.
     ///
-    /// Chrome plays audio from a helper process registered under its own bundle
-    /// ID, so the parent alone may carry no audio. Listing several identifiers
-    /// is free — a silent application contributes silence. Run
-    /// `swift Tools/audio-process-watch.swift` to confirm the right values on a
-    /// given machine.
+    /// Deliberately broad. Listing an application that is not running, or is
+    /// running silently, costs nothing — it contributes silence. Listing too
+    /// few costs a whole meeting: a real 40-minute Zoom call was recorded with
+    /// only Chrome configured and the far side came out completely silent, and
+    /// that is not discoverable until the recording is over.
+    ///
+    /// Most of these play audio from a helper process with its own bundle ID,
+    /// so the parent alone is not enough. Use Settings → 再生中を検出, or
+    /// `--list-apps`, to add anything missing on a given machine.
     static let defaultMeetingBundleIDs = [
+        // Browsers — Meet, Teams web, Zoom web, and everything else in a tab.
         "com.google.Chrome",
-        "com.google.Chrome.helper"
+        "com.google.Chrome.helper",
+        "com.apple.Safari",
+        "com.apple.WebKit.GPU",
+
+        // Zoom. Meeting audio comes from the host processes, not us.zoom.xos.
+        "us.zoom.xos",
+        "us.zoom.CptHost",
+        "us.zoom.caphost",
+        "us.zoom.aomhost",
+        "us.zoom.airhost",
+
+        // LINE runs calls in a separate bundled application.
+        "jp.naver.line.mac",
+        "jp.naver.line.mac.LineCall",
+
+        // Other common meeting clients.
+        "com.microsoft.teams2",
+        "com.microsoft.teams",
+        "com.tinyspeck.slackmacgap",
+        "com.hnc.Discord"
     ]
 
     /// A meeting application and the bundle IDs that actually emit its audio.

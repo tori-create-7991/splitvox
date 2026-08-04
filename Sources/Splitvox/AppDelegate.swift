@@ -297,6 +297,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 _ = session.finish()
                 updateStatusItem()
 
+                warnIfFarSideSilent(directory: directory)
+
                 if let url = lastTranscriptURL {
                     NSWorkspace.shared.activateFileViewerSelecting([url])
                 }
@@ -343,6 +345,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     + "録音ファイルは残っています:\n\(directory.path)"
             )
         }
+    }
+
+    /// Warn when the far side recorded silence.
+    ///
+    /// This is the one failure that looks like success: the app records, the
+    /// transcript fills up with your own speech, and only the other person is
+    /// missing. It happened on a real 40-minute Zoom call configured for Chrome
+    /// only, and went unnoticed until the meeting was over. Checking the level
+    /// costs nothing and turns a wasted meeting into a settings fix.
+    private func warnIfFarSideSilent(directory: URL) {
+        let url = RecordingStore.systemAudioFileURL(in: directory)
+        guard let analysis = try? AudioAnalysis.analyse(url) else { return }
+        guard analysis.overallRMS <= 0 || AudioAnalysis.decibels(analysis.overallRMS) < -70 else {
+            return
+        }
+
+        let configured = preferences.meetingBundleIDs.joined(separator: "\n")
+        showMessage(
+            "相手側の音声が録音されていません（無音）。\n\n"
+                + "会議アプリのバンドルIDが設定に含まれていない可能性があります。"
+                + "設定… →「再生中を検出」を、会議の音が鳴っている状態で押すと追加できます。\n\n"
+                + "現在の設定:\n\(configured)\n\n"
+                + "録音ファイルは残っています:\n\(directory.path)"
+        )
     }
 
     /// Asked when recording is first attempted rather than at launch, so the

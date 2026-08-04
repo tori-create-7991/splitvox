@@ -76,6 +76,8 @@ struct RecordingStore {
         return formatter
     }()
 
+    /// 16-bit PCM WAV. Uncompressed float costs about
+    /// 2 GB an hour across both tracks; 16-bit halves it losslessly for speech.
     static func microphoneFileURL(in sessionDirectory: URL) -> URL {
         sessionDirectory.appendingPathComponent("me.wav")
     }

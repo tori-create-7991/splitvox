@@ -1,3 +1,4 @@
+import AVFoundation
 import AVFAudio
 import AudioToolbox
 import CoreAudio
@@ -96,6 +97,7 @@ enum ProbeCommand {
             print("input device: \(recorder.inputDeviceName)")
             print("layout: mic ch \(recorder.layout.microphoneChannels), "
                   + "tap ch \(recorder.layout.systemAudioChannels)")
+            print("microphone permission: \(describeMicrophonePermission())")
             print("\nrecording \(Int(seconds))s — speak, and play audio in the meeting app")
 
             try recorder.start(microphoneURL: microphoneURL, systemAudioURL: systemAudioURL)
@@ -108,6 +110,10 @@ enum ProbeCommand {
 
             recorder.stop()
             print("\nbuffers delivered by the device: \(recorder.observedBufferLayout)")
+            if recorder.writeFailures > 0 {
+                print("WRITE FAILURES: \(recorder.writeFailures)"
+                      + (recorder.firstWriteError.map { " — \($0)" } ?? ""))
+            }
             print("stopped. wrote:")
             print("  \(microphoneURL.path)")
             print("  \(systemAudioURL.path)")
@@ -169,6 +175,19 @@ enum ProbeCommand {
             print("\(label): \(asbd.mChannelsPerFrame) ch, \(asbd.mSampleRate) Hz")
         } else {
             print("\(label): unavailable (OSStatus \(status))")
+        }
+    }
+
+    /// `AudioDeviceStart` returns `noErr` even when microphone consent is
+    /// missing — the callbacks simply never arrive. Reading the status makes
+    /// that failure visible instead of looking like a broken device.
+    static func describeMicrophonePermission() -> String {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: return "authorized"
+        case .notDetermined: return "notDetermined (未確認 — 許可ダイアログが必要)"
+        case .denied: return "DENIED (システム設定 → プライバシーとセキュリティ → マイク)"
+        case .restricted: return "restricted"
+        @unknown default: return "unknown"
         }
     }
 
