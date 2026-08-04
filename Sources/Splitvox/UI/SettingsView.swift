@@ -12,6 +12,8 @@ struct SettingsView: View {
     @State private var savedMessage: String?
     @State private var detectionMessage: String?
     @State private var autoRecordEnabled = false
+    @State private var launchAtLogin = false
+    @State private var loginItemMessage: String?
 
     /// Sentinel for "follow the system default", which is stored as nil.
     private static let systemDefaultTag = ""
@@ -76,6 +78,25 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("起動") {
+                Toggle("ログイン時に起動する", isOn: $launchAtLogin)
+                    .onChange(of: launchAtLogin) { _, value in
+                        applyLaunchAtLogin(value)
+                    }
+
+                if let loginItemMessage {
+                    Text(loginItemMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if LoginItem.status == .requiresApproval {
+                    Button("システム設定を開いて許可する") {
+                        LoginItem.openLoginItemsSettings()
+                    }
+                }
+            }
+
             Section("自動記録") {
                 Toggle("会議を検出したら自動で録音する", isOn: $autoRecordEnabled)
                     .onChange(of: autoRecordEnabled) { _, value in
@@ -126,6 +147,11 @@ struct SettingsView: View {
         installedApps = InstalledAppLookup.scan()
         autoRecordEnabled = store.autoRecordEnabled
 
+        // Read from the system rather than from our own defaults: macOS is the
+        // authority here, and the user can revoke it in System Settings.
+        launchAtLogin = LoginItem.status == .enabled
+        loginItemMessage = describeLoginItemStatus()
+
         // A device that has been unplugged since it was chosen falls back to
         // the system default rather than showing a blank selection.
         let stored = store.inputDeviceUID
@@ -140,6 +166,29 @@ struct SettingsView: View {
         app.helperBundleIDs.isEmpty
             ? app.name
             : "\(app.name)  (+\(app.helperBundleIDs.count))"
+    }
+
+    private func describeLoginItemStatus() -> String? {
+        switch LoginItem.status {
+        case .enabled, .disabled:
+            return nil
+        case .requiresApproval:
+            return "システム設定での許可が必要です。"
+        case .unavailable:
+            return "この起動方法では設定できません（ビルドした .app から起動してください）。"
+        }
+    }
+
+    private func applyLaunchAtLogin(_ enabled: Bool) {
+        switch LoginItem.setEnabled(enabled) {
+        case .success:
+            loginItemMessage = describeLoginItemStatus()
+        case .failure(let error):
+            // Reflect what actually happened rather than leaving the toggle
+            // showing a state the system did not accept.
+            launchAtLogin = LoginItem.status == .enabled
+            loginItemMessage = "設定できませんでした: \(error.localizedDescription)"
+        }
     }
 
     private func addBundleIDs(_ ids: [String]) {

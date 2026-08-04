@@ -41,6 +41,8 @@ splitvox は録音の時点で経路を分けます。相手の声はプロセ�
   ありません。確定した結果だけを書くので、文字が後から書き換わることはありません
 - **話者ラベル付き Markdown** — 時系列でマージし、`[自分]` / `[相手]` を付与
 - **断片の自動結合** — 認識器が単語の途中で区切った断片を、話者ごとに連結します
+- **自動記録** — ヘッドセットを着けて音が鳴り始めると自動で録音を開始します（既定はオフ）
+- **ログイン時起動** — 設定から有効にできます
 - **完全オフライン** — ネットワーク通信を一切行いません
 
 要約機能はありません。出力された Markdown を任意の AI に貼って使う想定です。
@@ -83,8 +85,8 @@ SPLITVOX_SIGN_IDENTITY="任意の証明書名" bash scripts/make-app.sh
 ## 初回セットアップ
 
 1. **権限** — 初回の録音時に「マイク」と「システム音声録音」の許可を求められます。両方許可してください
-2. **会議アプリの指定** — メニューバー → 設定… で指定します。既定は Chrome です。
-   追加方法は4通りあります。
+2. **会議アプリの指定** — 既定で Chrome / Safari / Zoom / LINE / Teams / Slack / Discord を
+   対象にしているので、多くの場合は設定不要です。追加が必要なら4通りあります。
 
    | 方法 | 用途 |
    |---|---|
@@ -126,6 +128,25 @@ SPLITVOX_SIGN_IDENTITY="任意の証明書名" bash scripts/make-app.sh
 埋もれて見えなくなっても、キー操作なら影響を受けません**（ノッチのある Mac では
 アイコンが押し出されて表示されないことがあります）。
 
+### 自動記録
+
+設定… →「会議を検出したら自動で録音する」を有効にすると、**ヘッドセットを着けて音が
+鳴り始めた時点で自動的に録音が始まります**。押し忘れがなくなります。
+
+ヘッドセットを着けるのは通話の前に必ず起きる動作で、しかも誰かが話し始める前に
+完了しています。どのアプリを会議とみなすかを推測する必要もありません。
+
+- 判定: 既定の入力が内蔵マイク以外 **かつ** 対象アプリが音を出している
+- 条件が約5秒続くと開始、約30秒途切れると停止します
+- ヘッドセットを着けたまま無音でいる間は録音しません（1時間あたり約1GBを消費するため）
+- 動画の再生も記録されます
+
+有効にする前に、録音せず判定だけを観察できます。
+
+```bash
+./Splitvox.app/Contents/MacOS/Splitvox --probe-detect 60
+```
+
 出力先:
 
 ```
@@ -160,6 +181,9 @@ swift Tools/audio-process-watch.swift 60
 
 # 録音しながら文字起こしする経路を検証する（本番と同じ経路）
 ./Splitvox.app/Contents/MacOS/Splitvox --probe-live 25
+
+# 自動記録の判定だけを観察する（録音はしない）
+./Splitvox.app/Contents/MacOS/Splitvox --probe-detect 60
 ```
 
 `--probe-live` は各段の件数を出します。`appended` が音声の到着、`yielded` が変換後の
@@ -192,7 +216,8 @@ swift Tools/audio-process-watch.swift 60
 - **画面表示はありません。** 文字起こしはリアルタイムで `transcript.md` に書かれますが、
   アプリ内に表示するウィンドウはありません。ファイルを開いて見てください
 - 固有名詞や英単語の認識精度は完璧ではありません（`GDP` → `GDB` など）
-- Zoom / Teams は設定でバンドルIDを追加すれば動作する想定ですが、検証していません
+- Teams / Slack / Discord / Webex のバンドルIDは推定値です（Chrome / Safari / Zoom / LINE は
+  実機で確認済み）。外れていても「再生中を検出」で実測値を追加できます
 
 ## 設計メモ
 
@@ -210,6 +235,9 @@ swift Tools/audio-process-watch.swift 60
 | 整形 | `Core/TranscriptMerger.swift` | 結合・マージ・Markdown 生成 |
 | | `Core/CaptureChannelLayout.swift` | チャンネル配置の解決 |
 | 状態 | `Core/RecordingSession.swift` | 録音ライフサイクル |
+| 自動記録 | `Core/MeetingDetector.swift` | ヘッドセットと再生の検知 |
+| | `Core/MeetingTrigger.swift` | 開始・停止のタイミング判定 |
+| | `Core/LoginItem.swift` | ログイン時起動の登録 |
 | 永続化 | `Storage/RecordingStore.swift` / `PreferenceStore.swift` | 保存先・設定 |
 | 診断 | `Diagnostics/` / `Tools/` | 実機での切り分け |
 
