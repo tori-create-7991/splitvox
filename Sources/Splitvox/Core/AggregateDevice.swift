@@ -41,9 +41,15 @@ final class AggregateDevice {
             // tap is synthesised from whatever the meeting app happens to play.
             kAudioAggregateDeviceMainSubDeviceKey: inputDeviceUID,
 
-            // Start the tap with the device rather than requiring a separate
-            // start, so no audio is missed between the two calls.
-            kAudioAggregateDeviceTapAutoStartKey: true,
+            // Off deliberately. With auto-start on, the whole aggregate device
+            // stalls while the tapped applications are silent — and because the
+            // microphone shares this device, the local voice stops recording
+            // too. Measured: with nothing playing, both tracks came out at
+            // -inf; with a video running, both recorded normally.
+            //
+            // That would lose the opening of every meeting, where you speak
+            // before the other side does.
+            kAudioAggregateDeviceTapAutoStartKey: false,
 
             kAudioAggregateDeviceSubDeviceListKey: [
                 [
