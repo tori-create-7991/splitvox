@@ -24,6 +24,20 @@ struct RecordingStore {
         self.baseDirectory = baseDirectory
     }
 
+    /// Free space a recording should have before it starts.
+    ///
+    /// Roughly 1 GB per hour across both tracks, plus a margin. Only an
+    /// automatic run is sized against the cap: a deliberate ten-minute
+    /// recording must not be refused because the cap happens to be eight hours.
+    ///
+    /// A free function rather than a method on `AppDelegate` so this arithmetic
+    /// can be pinned by a test — the run-mode distinction was introduced as a
+    /// bug fix and had no coverage at all.
+    static func requiredBytes(automatic: Bool, timing: AutoRecordTiming) -> Int64 {
+        let hours = automatic ? timing.maximumDuration / 3600 : 1
+        return Int64((hours + 1) * 1_000_000_000)
+    }
+
     static func defaultBaseDirectory() -> URL {
         FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]

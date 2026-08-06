@@ -60,7 +60,7 @@ splitvox は録音の時点で経路を分けます。相手の声はプロセ�
 ## ビルド & 起動
 
 ```bash
-git clone <this repo>
+git clone https://github.com/tori-create-7991/splitvox.git
 cd splitvox
 bash scripts/make-app.sh
 open Splitvox.app

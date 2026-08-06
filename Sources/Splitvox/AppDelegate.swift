@@ -386,13 +386,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return nil
         }
 
-        // Roughly 1 GB per hour across both tracks, plus a margin. Only an
-        // automatic run is sized against the cap: a deliberate 10-minute
-        // recording should not be refused because the cap happens to be 8 hours.
-        let hours = currentRunWasAutomatic
-            ? preferences.autoRecordTiming.maximumDuration / 3600
-            : 1
-        let required = Int64((hours + 1) * 1_000_000_000)
+        let required = RecordingStore.requiredBytes(
+            automatic: currentRunWasAutomatic,
+            timing: preferences.autoRecordTiming
+        )
         guard available < required else { return nil }
 
         let availableGB = Double(available) / 1_000_000_000

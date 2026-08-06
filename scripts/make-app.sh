@@ -32,6 +32,12 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>LSMinimumSystemVersion</key><string>26.0</string>
     <key>LSUIElement</key><true/>
     <key>NSMicrophoneUsageDescription</key><string>会議中のあなたの発言を録音し、端末内で文字起こしするために使用します。設定で自動記録を有効にした場合、会議の検出により自動的に開始することがあります。音声が外部に送信されることはありません。</string>
+    <!--
+      Declared defensively. macOS 26's SpeechAnalyzer consumes buffers we supply
+      and no SFSpeechRecognizer authorization call exists in the tree, so this
+      prompt is never shown today. Kept because hitting a TCC-protected API
+      without its usage string terminates the process rather than failing.
+    -->
     <key>NSSpeechRecognitionUsageDescription</key><string>録音した会議音声を端末内で文字起こしするために使用します。音声が外部に送信されることはありません。</string>
     <!--
       Required for the Core Audio process tap. Without this key macOS never
@@ -53,17 +59,11 @@ PLIST
 # appears under "valid identities only", but codesign can still sign with it —
 # hence no -v on find-identity.
 PRIMARY_IDENTITY="${SPLITVOX_SIGN_IDENTITY:-splitvox Self-Signed}"
-# Reuse of a certificate created for another local project. TCC keys on bundle
-# id plus signature, so sharing one certificate keeps permissions independent.
-# The trailing space in this name is intentional — it is part of the CN.
-FALLBACK_IDENTITY="NaniMini Self-Signed "
 
 AVAILABLE="$(security find-identity -p codesigning 2>/dev/null || true)"
 
 if printf '%s' "$AVAILABLE" | grep -qF "$PRIMARY_IDENTITY"; then
     SIGN_IDENTITY="$PRIMARY_IDENTITY"
-elif printf '%s' "$AVAILABLE" | grep -qF "$FALLBACK_IDENTITY"; then
-    SIGN_IDENTITY="$FALLBACK_IDENTITY"
 else
     SIGN_IDENTITY=""
 fi

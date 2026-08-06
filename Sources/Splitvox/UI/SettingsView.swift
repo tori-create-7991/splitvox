@@ -150,6 +150,16 @@ struct SettingsView: View {
                     }
                 }
 
+                // Reachable two ways: the user turns every condition off, or a
+                // stored set written by a newer build is masked down to nothing
+                // on downgrade. Both leave an enabled toggle that never fires,
+                // with no other indication of why.
+                if autoRecordEnabled && autoRecordConditions.isEmpty {
+                    Text("条件が1つも有効になっていないため、自動記録は動作しません。")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+
                 Picker("開始まで", selection: $startAfter) {
                     ForEach(AutoRecordTiming.startChoices, id: \.self) { value in
                         Text(AutoRecordTiming.describeSeconds(value)).tag(value)

@@ -88,3 +88,29 @@ struct RecordingStoreTests {
         #expect(FileManager.default.fileExists(atPath: second.path))
     }
 }
+
+@Suite("RecordingStore — 必要な空き容量")
+struct RequiredBytesTests {
+
+    /// 手動録音に自動記録の上限を適用すると、上限8時間の設定では
+    /// 10分録るだけでも 9GB を要求して拒否される。
+    @Test("手動録音は上限に関係なく一定量しか要求しない")
+    func manualRunIgnoresTheCap() {
+        let longCap = AutoRecordTiming(startAfter: 5, stopAfter: 30, maximumDuration: 8 * 3600)
+        let shortCap = AutoRecordTiming(startAfter: 5, stopAfter: 30, maximumDuration: 3600)
+
+        #expect(RecordingStore.requiredBytes(automatic: false, timing: longCap) == 2_000_000_000)
+        #expect(
+            RecordingStore.requiredBytes(automatic: false, timing: longCap)
+                == RecordingStore.requiredBytes(automatic: false, timing: shortCap)
+        )
+    }
+
+    /// 自動記録は無人で上限まで走るので、その分の空きを先に確認する。
+    @Test("自動記録は上限に応じた空き容量を要求する")
+    func automaticRunIsSizedAgainstTheCap() {
+        let timing = AutoRecordTiming(startAfter: 5, stopAfter: 30, maximumDuration: 4 * 3600)
+
+        #expect(RecordingStore.requiredBytes(automatic: true, timing: timing) == 5_000_000_000)
+    }
+}
