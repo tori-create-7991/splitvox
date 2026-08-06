@@ -129,8 +129,6 @@ final class LiveTranscriber {
 
     /// Feed captured audio. Safe to call from the audio callback queue, which
     /// is serial, so the converter is never used concurrently.
-    /// Feed captured audio. Safe to call from the audio callback queue, which
-    /// is serial, so the converter is never used concurrently.
     ///
     /// No `bufferStartTime` is supplied. Deriving one from the source frame
     /// count while handing over *converted* buffers made the analyzer reject

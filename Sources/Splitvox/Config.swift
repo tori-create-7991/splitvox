@@ -91,6 +91,24 @@ enum Config {
         )
     ]
 
+    struct TranscriptionLocale: Sendable {
+        let identifier: String
+        let label: String
+    }
+
+    /// Languages offered in Settings. SpeechTranscriber supports 42 locales;
+    /// these are the ones worth surfacing rather than a full list.
+    static let transcriptionLocales: [TranscriptionLocale] = [
+        TranscriptionLocale(identifier: "ja-JP", label: "日本語"),
+        TranscriptionLocale(identifier: "en-US", label: "English (US)"),
+        TranscriptionLocale(identifier: "en-GB", label: "English (UK)"),
+        TranscriptionLocale(identifier: "zh-CN", label: "中文（簡体）"),
+        TranscriptionLocale(identifier: "ko-KR", label: "한국어"),
+        TranscriptionLocale(identifier: "de-DE", label: "Deutsch"),
+        TranscriptionLocale(identifier: "fr-FR", label: "Français"),
+        TranscriptionLocale(identifier: "es-ES", label: "Español")
+    ]
+
     /// Transcription locale. SpeechTranscriber lists ja_JP in supportedLocales.
     static let transcriptionLocaleIdentifier = "ja-JP"
 

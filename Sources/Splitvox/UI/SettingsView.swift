@@ -1,3 +1,4 @@
+import AppKit
 import KeyboardShortcuts
 import SwiftUI
 
@@ -12,6 +13,13 @@ struct SettingsView: View {
     @State private var savedMessage: String?
     @State private var detectionMessage: String?
     @State private var autoRecordEnabled = false
+    @State private var autoRecordConditions: AutoRecordConditions = .default
+    @State private var startAfter = AutoRecordTiming.default.startAfter
+    @State private var stopAfter = AutoRecordTiming.default.stopAfter
+    @State private var maximumDuration = AutoRecordTiming.default.maximumDuration
+    @State private var transcriptionLocale = Config.transcriptionLocaleIdentifier
+    @State private var excludedText: String = ""
+    @State private var warnOnSilentFarSide = true
     @State private var launchAtLogin = false
     @State private var loginItemMessage: String?
 
@@ -65,6 +73,30 @@ struct SettingsView: View {
                 }
             }
 
+            Section("除外するアプリ") {
+                Text("ここに書いたアプリは録音の対象から外れ、自動記録の合図にもなりません。1行に1つ。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                TextEditor(text: $excludedText)
+                    .font(.system(.body, design: .monospaced))
+                    .frame(minHeight: 60)
+                    .border(Color.secondary.opacity(0.3))
+                    // Saved on change like every other setting here. A control
+                    // whose job is to *prevent* recording must not fail in the
+                    // direction that records more when the window is closed.
+                    .onChange(of: excludedText) { _, _ in saveExclusions() }
+
+                Text(
+                    "前方一致で判定するので、notion.id と書けば notion.id.helper も除外されます。"
+                        + "通知音を出すのは本体ではなくヘルパーであることが多いためです。"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                Button("再生中のアプリを除外に追加") { excludePlayingApps() }
+            }
+
             Section("マイク") {
                 Picker("入力デバイス", selection: $selectedInputUID) {
                     Text("システムの既定").tag(Self.systemDefaultTag)
@@ -101,16 +133,88 @@ struct SettingsView: View {
                 Toggle("会議を検出したら自動で録音する", isOn: $autoRecordEnabled)
                     .onChange(of: autoRecordEnabled) { _, value in
                         store.autoRecordEnabled = value
+                        if value { acknowledgeAutoRecordOnce() }
                     }
 
-                Text(
-                    "ヘッドセット（内蔵マイク以外が既定の入力）が有効で、かつ上記のアプリが"
-                        + "音を出しているときに開始します。動画の再生も記録されます。"
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                Text("開始条件（有効にしたものをすべて満たしたとき）")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
-                Text("条件が約5秒続いたら開始し、約30秒途切れたら停止します。")
+                ForEach(AutoRecordConditions.orderedOptions, id: \.rawValue) { condition in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Toggle(condition.label, isOn: binding(for: condition))
+                            .disabled(!autoRecordEnabled)
+                        Text(condition.detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                // Reachable two ways: the user turns every condition off, or a
+                // stored set written by a newer build is masked down to nothing
+                // on downgrade. Both leave an enabled toggle that never fires,
+                // with no other indication of why.
+                if autoRecordEnabled && autoRecordConditions.isEmpty {
+                    Text("条件が1つも有効になっていないため、自動記録は動作しません。")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+
+                Picker("開始まで", selection: $startAfter) {
+                    ForEach(AutoRecordTiming.startChoices, id: \.self) { value in
+                        Text(AutoRecordTiming.describeSeconds(value)).tag(value)
+                    }
+                }
+                .disabled(!autoRecordEnabled)
+                .onChange(of: startAfter) { _, _ in saveTiming() }
+
+                Picker("停止まで", selection: $stopAfter) {
+                    ForEach(AutoRecordTiming.stopChoices, id: \.self) { value in
+                        Text(AutoRecordTiming.describeSeconds(value)).tag(value)
+                    }
+                }
+                .disabled(!autoRecordEnabled)
+                .onChange(of: stopAfter) { _, _ in saveTiming() }
+
+                Text("停止までが短いと、会話が途切れるたびに会議が分割されます。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Picker("1回の上限", selection: $maximumDuration) {
+                    ForEach(AutoRecordTiming.maximumChoices, id: \.self) { value in
+                        Text(AutoRecordTiming.describeSeconds(value)).tag(value)
+                    }
+                }
+                .disabled(!autoRecordEnabled)
+                .onChange(of: maximumDuration) { _, _ in saveTiming() }
+
+                Text("上限に達すると停止し、条件が一度途切れるまで再開しません。1時間あたり約1GBを消費します。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("文字起こし") {
+                Picker("言語", selection: $transcriptionLocale) {
+                    ForEach(Config.transcriptionLocales, id: \.identifier) { locale in
+                        Text(locale.label).tag(locale.identifier)
+                    }
+                }
+                .onChange(of: transcriptionLocale) { _, value in
+                    store.transcriptionLocaleIdentifier = value
+                }
+
+                Text("端末にモデルが無い言語は、初回の文字起こし時にダウンロードされます。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("通知") {
+                Toggle("相手側が無音のときに警告する", isOn: $warnOnSilentFarSide)
+                    .onChange(of: warnOnSilentFarSide) { _, value in
+                        store.warnOnSilentFarSide = value
+                    }
+
+                Text("オフにしても session.log には記録されるので、後から原因を追えます。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -146,6 +250,15 @@ struct SettingsView: View {
         inputDevices = AudioDeviceLookup.availableInputDevices()
         installedApps = InstalledAppLookup.scan()
         autoRecordEnabled = store.autoRecordEnabled
+        autoRecordConditions = store.autoRecordConditions
+
+        let timing = store.autoRecordTiming
+        startAfter = timing.startAfter
+        stopAfter = timing.stopAfter
+        maximumDuration = timing.maximumDuration
+        transcriptionLocale = store.transcriptionLocaleIdentifier
+        warnOnSilentFarSide = store.warnOnSilentFarSide
+        excludedText = store.excludedBundleIDs.joined(separator: "\n")
 
         // Read from the system rather than from our own defaults: macOS is the
         // authority here, and the user can revoke it in System Settings.
@@ -166,6 +279,86 @@ struct SettingsView: View {
         app.helperBundleIDs.isEmpty
             ? app.name
             : "\(app.name)  (+\(app.helperBundleIDs.count))"
+    }
+
+    /// Each toggle reads and writes one bit of the stored set.
+    private func binding(for condition: AutoRecordConditions) -> Binding<Bool> {
+        Binding(
+            get: { autoRecordConditions.contains(condition) },
+            set: { isOn in
+                if isOn {
+                    autoRecordConditions.insert(condition)
+                } else {
+                    autoRecordConditions.remove(condition)
+                }
+                store.autoRecordConditions = autoRecordConditions
+            }
+        )
+    }
+
+    /// Adds whatever is playing now to the exclusion list.
+    ///
+    /// The counterpart of 再生中を検出: the same measurement, used to rule an
+    /// application out rather than in.
+    private func excludePlayingApps() {
+        let playing = Set(AudioProcessLookup.bundleIDsProducingOutput())
+            .subtracting([Config.bundleIdentifier])
+            .sorted()
+
+        guard !playing.isEmpty else {
+            detectionMessage = "音を出しているアプリが見つかりません。"
+            return
+        }
+
+        var current = excludedText
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+
+        let added = playing.filter { !current.contains($0) }
+        guard !added.isEmpty else {
+            detectionMessage = "すでに除外されています"
+            return
+        }
+
+        current.append(contentsOf: added)
+        excludedText = current.joined(separator: "\n")
+        detectionMessage = "除外に追加: \(added.joined(separator: ", "))"
+    }
+
+    /// Shown once, the first time auto-record is switched on.
+    private func acknowledgeAutoRecordOnce() {
+        guard !store.autoRecordAcknowledged else { return }
+        store.autoRecordAcknowledged = true
+
+        let alert = NSAlert()
+        alert.messageText = "自動記録を有効にしました"
+        alert.informativeText = """
+            条件を満たすと、操作しなくても録音が始まります。
+
+            ・会議相手の音声も録音されます
+            ・相手に通知は行われません
+            ・録音の可否と告知は、あなたの責任で判断してください
+
+            録音されたものは、メニューバーの「録音フォルダを開く」から\
+            いつでも確認・削除できます。
+            """
+        alert.alertStyle = .informational
+        alert.runModal()
+    }
+
+    private func saveExclusions() {
+        store.excludedBundleIDs = excludedText
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
+    private func saveTiming() {
+        store.autoRecordTiming = AutoRecordTiming(
+            startAfter: startAfter,
+            stopAfter: stopAfter,
+            maximumDuration: maximumDuration
+        )
     }
 
     private func describeLoginItemStatus() -> String? {
@@ -215,7 +408,7 @@ struct SettingsView: View {
     /// the only reliable way to get them, so it is offered directly here.
     private func detectPlayingApps() {
         let playing = Set(AudioProcessLookup.bundleIDsProducingOutput())
-            .subtracting(["com.ryo.splitvox"])
+            .subtracting([Config.bundleIdentifier])
             .sorted()
 
         guard !playing.isEmpty else {
@@ -237,6 +430,7 @@ struct SettingsView: View {
         // Re-read so the field shows what was actually kept, including the
         // fallback to defaults when the list was emptied.
         bundleIDText = store.meetingBundleIDs.joined(separator: "\n")
+        excludedText = store.excludedBundleIDs.joined(separator: "\n")
         savedMessage = "保存しました"
     }
 }

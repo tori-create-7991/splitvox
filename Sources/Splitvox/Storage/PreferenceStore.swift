@@ -21,6 +21,14 @@ struct PreferenceStore {
         static let meetingBundleIDs = "meetingBundleIDs"
         static let inputDeviceUID = "inputDeviceUID"
         static let autoRecordEnabled = "autoRecordEnabled"
+        static let autoRecordCondition = "autoRecordCondition"
+        static let startAfter = "autoRecordStartAfter"
+        static let stopAfter = "autoRecordStopAfter"
+        static let maximumDuration = "autoRecordMaximumDuration"
+        static let transcriptionLocale = "transcriptionLocale"
+        static let warnOnSilentFarSide = "warnOnSilentFarSide"
+        static let autoRecordAcknowledged = "autoRecordAcknowledged"
+        static let excludedBundleIDs = "excludedBundleIDs"
     }
 
     private let defaults: UserDefaults
@@ -70,12 +78,134 @@ struct PreferenceStore {
         nonmutating set { defaults.set(newValue, forKey: Key.autoRecordEnabled) }
     }
 
+    /// Which signals must hold before a recording starts.
+    ///
+    /// Stored as the raw bitmask. An absent value means "never configured" and
+    /// falls back to the default, which is not the same as an explicitly empty
+    /// set — that one disables the trigger.
+    var autoRecordConditions: AutoRecordConditions {
+        get {
+            guard defaults.object(forKey: Key.autoRecordCondition) != nil else {
+                return .default
+            }
+            let stored = AutoRecordConditions(
+                rawValue: defaults.integer(forKey: Key.autoRecordCondition)
+            )
+            // Drop bits a newer version wrote. Kept here as well as in
+            // `shouldRecord` so the Settings toggles show what is actually in
+            // force rather than an option this build cannot render.
+            return stored.intersection(.known)
+        }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.autoRecordCondition) }
+    }
+
+    /// Timing for the automatic trigger. Absent values fall back to defaults
+    /// rather than to zero, which would start and stop constantly.
+    var autoRecordTiming: AutoRecordTiming {
+        get {
+            var timing = AutoRecordTiming.default
+            // Clamped to the offered choices. A stored 0 for maximumDuration —
+            // reachable via `defaults write` or a future migration — would make
+            // the cap fire on the first tick after every start, producing a
+            // stream of 3-second sessions.
+            timing.startAfter = Self.offered(
+                defaults, Key.startAfter,
+                to: AutoRecordTiming.startChoices, default: timing.startAfter
+            )
+            timing.stopAfter = Self.offered(
+                defaults, Key.stopAfter,
+                to: AutoRecordTiming.stopChoices, default: timing.stopAfter
+            )
+            timing.maximumDuration = Self.offered(
+                defaults, Key.maximumDuration,
+                to: AutoRecordTiming.maximumChoices, default: timing.maximumDuration
+            )
+            return timing
+        }
+        nonmutating set {
+            defaults.set(newValue.startAfter, forKey: Key.startAfter)
+            defaults.set(newValue.stopAfter, forKey: Key.stopAfter)
+            defaults.set(newValue.maximumDuration, forKey: Key.maximumDuration)
+        }
+    }
+
+    /// Language the recogniser is asked for. A meeting held in another language
+    /// transcribes as noise otherwise.
+    var transcriptionLocaleIdentifier: String {
+        get {
+            let stored = defaults.string(forKey: Key.transcriptionLocale)?
+                .trimmingCharacters(in: .whitespaces)
+            return Self.validLocale(stored) ?? Config.transcriptionLocaleIdentifier
+        }
+        nonmutating set { defaults.set(newValue, forKey: Key.transcriptionLocale) }
+    }
+
+    /// Show a dialog when the far side recorded silence.
+    ///
+    /// On by default because that failure looks like success — the transcript
+    /// fills with your own speech and only the other person is missing, which
+    /// went unnoticed for a whole 40-minute meeting once. Off is offered
+    /// because once the cause is known the dialog is just noise.
+    var warnOnSilentFarSide: Bool {
+        get {
+            guard defaults.object(forKey: Key.warnOnSilentFarSide) != nil else { return true }
+            return defaults.bool(forKey: Key.warnOnSilentFarSide)
+        }
+        nonmutating set { defaults.set(newValue, forKey: Key.warnOnSilentFarSide) }
+    }
+
+    /// Applications that must never trigger a recording, even when they are
+    /// playing and otherwise match.
+    ///
+    /// Needed because the include list is coarse: capturing Chrome also
+    /// captures every notification chime a web app makes through it. Matching
+    /// is by prefix, so the parent bundle ID covers its helpers.
+    var excludedBundleIDs: [String] {
+        get { Self.clean(defaults.stringArray(forKey: Key.excludedBundleIDs) ?? []) }
+        nonmutating set { defaults.set(Self.clean(newValue), forKey: Key.excludedBundleIDs) }
+    }
+
+    /// Locale must be one this build actually offers, so the Settings picker
+    /// always has a matching tag and cannot render blank.
+    private static func validLocale(_ identifier: String?) -> String? {
+        guard let identifier, !identifier.isEmpty else { return nil }
+        return Config.transcriptionLocales.contains { $0.identifier == identifier }
+            ? identifier
+            : nil
+    }
+
+    /// Whether the user has seen the one-time notice about unattended
+    /// recording. Enabling auto-record is the moment they take on
+    /// responsibility for recording other people; it should not pass silently.
+    var autoRecordAcknowledged: Bool {
+        get { defaults.bool(forKey: Key.autoRecordAcknowledged) }
+        nonmutating set { defaults.set(newValue, forKey: Key.autoRecordAcknowledged) }
+    }
+
     var current: Preferences {
         Preferences(
             meetingBundleIDs: meetingBundleIDs,
             inputDeviceUID: inputDeviceUID,
             autoRecordEnabled: autoRecordEnabled
         )
+    }
+
+    /// Reads a stored interval, falling back to `default` unless it is one of
+    /// the offered choices.
+    ///
+    /// Membership, not a range check: the Settings `Picker` tags each choice, so
+    /// an in-range value that is not offered leaves the control blank. Same
+    /// treatment as `validLocale`.
+    private static func offered(
+        _ defaults: UserDefaults,
+        _ key: String,
+        to choices: [TimeInterval],
+        default fallback: TimeInterval
+    ) -> TimeInterval {
+        guard defaults.object(forKey: key) != nil else { return fallback }
+        let stored = defaults.double(forKey: key)
+        guard choices.contains(stored) else { return fallback }
+        return stored
     }
 
     private static func clean(_ values: [String]) -> [String] {
