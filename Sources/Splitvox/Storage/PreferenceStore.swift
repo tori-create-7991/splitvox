@@ -27,6 +27,8 @@ struct PreferenceStore {
         static let stopAfter = "autoRecordStopAfter"
         static let maximumDuration = "autoRecordMaximumDuration"
         static let transcriptionLocale = "transcriptionLocale"
+        static let warnOnSilentFarSide = "warnOnSilentFarSide"
+        static let excludedBundleIDs = "excludedBundleIDs"
     }
 
     private let defaults: UserDefaults
@@ -125,6 +127,31 @@ struct PreferenceStore {
                 : stored!
         }
         nonmutating set { defaults.set(newValue, forKey: Key.transcriptionLocale) }
+    }
+
+    /// Show a dialog when the far side recorded silence.
+    ///
+    /// On by default because that failure looks like success — the transcript
+    /// fills with your own speech and only the other person is missing, which
+    /// went unnoticed for a whole 40-minute meeting once. Off is offered
+    /// because once the cause is known the dialog is just noise.
+    var warnOnSilentFarSide: Bool {
+        get {
+            guard defaults.object(forKey: Key.warnOnSilentFarSide) != nil else { return true }
+            return defaults.bool(forKey: Key.warnOnSilentFarSide)
+        }
+        nonmutating set { defaults.set(newValue, forKey: Key.warnOnSilentFarSide) }
+    }
+
+    /// Applications that must never trigger a recording, even when they are
+    /// playing and otherwise match.
+    ///
+    /// Needed because the include list is coarse: capturing Chrome also
+    /// captures every notification chime a web app makes through it. Matching
+    /// is by prefix, so the parent bundle ID covers its helpers.
+    var excludedBundleIDs: [String] {
+        get { Self.clean(defaults.stringArray(forKey: Key.excludedBundleIDs) ?? []) }
+        nonmutating set { defaults.set(Self.clean(newValue), forKey: Key.excludedBundleIDs) }
     }
 
     var current: Preferences {

@@ -72,7 +72,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // recording on top of it would interleave two sessions.
         guard session.state != .transcribing else { return }
 
-        let sample = MeetingDetector.sample(meetingBundleIDs: preferences.meetingBundleIDs)
+        let sample = MeetingDetector.sample(
+            meetingBundleIDs: preferences.meetingBundleIDs,
+            excludedBundleIDs: preferences.excludedBundleIDs
+        )
 
         switch trigger.observe(meetingDetected: sample.shouldRecord(matching: preferences.autoRecordConditions), at: uptime) {
         case .none:
@@ -476,7 +479,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard analysis.overallRMS <= 0 || AudioAnalysis.decibels(analysis.overallRMS) < -70 else {
             return
         }
+        // Always logged, even when the dialog is off: the file is where this
+        // gets diagnosed later, and silencing a warning should not also
+        // silence the record of it.
         sessionLog?.write("FAR SIDE SILENT — 上の 'NOT captured' 行を確認してください")
+
+        guard preferences.warnOnSilentFarSide else { return }
 
         let configured = preferences.meetingBundleIDs.joined(separator: "\n")
         showMessage(

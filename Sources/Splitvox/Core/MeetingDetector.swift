@@ -32,7 +32,19 @@ enum MeetingDetector {
         }
     }
 
-    static func sample(meetingBundleIDs: [String]) -> Sample {
+    /// Whether a bundle ID falls under an exclusion.
+    ///
+    /// Prefix match on dot boundaries, so excluding `notion.id` also covers
+    /// `notion.id.helper` — the helper is usually what plays the notification
+    /// chime, and listing every one by hand is not reasonable. The boundary
+    /// check keeps `notion.identity.other` from being caught by it.
+    static func isExcluded(_ bundleID: String, by excluded: [String]) -> Bool {
+        excluded.contains { pattern in
+            bundleID == pattern || bundleID.hasPrefix(pattern + ".")
+        }
+    }
+
+    static func sample(meetingBundleIDs: [String], excludedBundleIDs: [String] = []) -> Sample {
         let configured = Set(meetingBundleIDs)
 
         // Splitvox holds the microphone while recording, so counting itself
@@ -43,6 +55,7 @@ enum MeetingDetector {
         let playing = Set(AudioProcessLookup.bundleIDsProducingOutput())
             .intersection(configured)
             .subtracting(excluded)
+            .filter { !isExcluded($0, by: excludedBundleIDs) }
 
         let capturing = AudioProcessLookup.bundleIDsConsumingInput(excluding: excluded)
 

@@ -17,6 +17,8 @@ struct SettingsView: View {
     @State private var stopAfter = AutoRecordTiming.default.stopAfter
     @State private var maximumDuration = AutoRecordTiming.default.maximumDuration
     @State private var transcriptionLocale = Config.transcriptionLocaleIdentifier
+    @State private var excludedText: String = ""
+    @State private var warnOnSilentFarSide = true
     @State private var launchAtLogin = false
     @State private var loginItemMessage: String?
 
@@ -68,6 +70,26 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+            }
+
+            Section("除外するアプリ") {
+                Text("ここに書いたアプリは、音を出していても録音の合図になりません。1行に1つ。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                TextEditor(text: $excludedText)
+                    .font(.system(.body, design: .monospaced))
+                    .frame(minHeight: 60)
+                    .border(Color.secondary.opacity(0.3))
+
+                Text(
+                    "前方一致で判定するので、notion.id と書けば notion.id.helper も除外されます。"
+                        + "通知音を出すのは本体ではなくヘルパーであることが多いためです。"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                Button("再生中のアプリを除外に追加") { excludePlayingApps() }
             }
 
             Section("マイク") {
@@ -170,6 +192,17 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("通知") {
+                Toggle("相手側が無音のときに警告する", isOn: $warnOnSilentFarSide)
+                    .onChange(of: warnOnSilentFarSide) { _, value in
+                        store.warnOnSilentFarSide = value
+                    }
+
+                Text("オフにしても session.log には記録されるので、後から原因を追えます。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("ショートカット") {
                 KeyboardShortcuts.Recorder("録音の開始 / 停止", name: .toggleRecording)
 
@@ -208,6 +241,8 @@ struct SettingsView: View {
         stopAfter = timing.stopAfter
         maximumDuration = timing.maximumDuration
         transcriptionLocale = store.transcriptionLocaleIdentifier
+        warnOnSilentFarSide = store.warnOnSilentFarSide
+        excludedText = store.excludedBundleIDs.joined(separator: "\n")
 
         // Read from the system rather than from our own defaults: macOS is the
         // authority here, and the user can revoke it in System Settings.
@@ -243,6 +278,36 @@ struct SettingsView: View {
                 store.autoRecordConditions = autoRecordConditions
             }
         )
+    }
+
+    /// Adds whatever is playing now to the exclusion list.
+    ///
+    /// The counterpart of 再生中を検出: the same measurement, used to rule an
+    /// application out rather than in.
+    private func excludePlayingApps() {
+        let playing = Set(AudioProcessLookup.bundleIDsProducingOutput())
+            .subtracting([Config.bundleIdentifier])
+            .sorted()
+
+        guard !playing.isEmpty else {
+            detectionMessage = "音を出しているアプリが見つかりません。"
+            return
+        }
+
+        var current = excludedText
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+
+        let added = playing.filter { !current.contains($0) }
+        guard !added.isEmpty else {
+            detectionMessage = "すでに除外されています"
+            return
+        }
+
+        current.append(contentsOf: added)
+        excludedText = current.joined(separator: "\n")
+        detectionMessage = "除外に追加: \(added.joined(separator: ", "))（保存が必要です）"
     }
 
     private func saveTiming() {
@@ -320,9 +385,14 @@ struct SettingsView: View {
 
         store.inputDeviceUID = selectedInputUID == Self.systemDefaultTag ? nil : selectedInputUID
 
+        store.excludedBundleIDs = excludedText
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+
         // Re-read so the field shows what was actually kept, including the
         // fallback to defaults when the list was emptied.
         bundleIDText = store.meetingBundleIDs.joined(separator: "\n")
+        excludedText = store.excludedBundleIDs.joined(separator: "\n")
         savedMessage = "保存しました"
     }
 }
