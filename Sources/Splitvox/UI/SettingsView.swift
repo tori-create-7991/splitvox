@@ -12,6 +12,11 @@ struct SettingsView: View {
     @State private var savedMessage: String?
     @State private var detectionMessage: String?
     @State private var autoRecordEnabled = false
+    @State private var autoRecordConditions: AutoRecordConditions = .default
+    @State private var startAfter = AutoRecordTiming.default.startAfter
+    @State private var stopAfter = AutoRecordTiming.default.stopAfter
+    @State private var maximumDuration = AutoRecordTiming.default.maximumDuration
+    @State private var transcriptionLocale = Config.transcriptionLocaleIdentifier
     @State private var launchAtLogin = false
     @State private var loginItemMessage: String?
 
@@ -103,14 +108,64 @@ struct SettingsView: View {
                         store.autoRecordEnabled = value
                     }
 
-                Text(
-                    "ヘッドセット（内蔵マイク以外が既定の入力）が有効で、かつ上記のアプリが"
-                        + "音を出しているときに開始します。動画の再生も記録されます。"
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                Text("開始条件（有効にしたものをすべて満たしたとき）")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
-                Text("条件が約5秒続いたら開始し、約30秒途切れたら停止します。")
+                ForEach(AutoRecordConditions.all, id: \.rawValue) { condition in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Toggle(condition.label, isOn: binding(for: condition))
+                            .disabled(!autoRecordEnabled)
+                        Text(condition.detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Picker("開始まで", selection: $startAfter) {
+                    ForEach(AutoRecordTiming.startChoices, id: \.self) { value in
+                        Text(AutoRecordTiming.describeSeconds(value)).tag(value)
+                    }
+                }
+                .disabled(!autoRecordEnabled)
+                .onChange(of: startAfter) { _, _ in saveTiming() }
+
+                Picker("停止まで", selection: $stopAfter) {
+                    ForEach(AutoRecordTiming.stopChoices, id: \.self) { value in
+                        Text(AutoRecordTiming.describeSeconds(value)).tag(value)
+                    }
+                }
+                .disabled(!autoRecordEnabled)
+                .onChange(of: stopAfter) { _, _ in saveTiming() }
+
+                Text("停止までが短いと、会話が途切れるたびに会議が分割されます。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Picker("1回の上限", selection: $maximumDuration) {
+                    ForEach(AutoRecordTiming.maximumChoices, id: \.self) { value in
+                        Text(AutoRecordTiming.describeSeconds(value)).tag(value)
+                    }
+                }
+                .disabled(!autoRecordEnabled)
+                .onChange(of: maximumDuration) { _, _ in saveTiming() }
+
+                Text("音が鳴り続けた場合の暴走防止。1時間あたり約1GBを消費します。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("文字起こし") {
+                Picker("言語", selection: $transcriptionLocale) {
+                    ForEach(Config.transcriptionLocales, id: \.identifier) { locale in
+                        Text(locale.label).tag(locale.identifier)
+                    }
+                }
+                .onChange(of: transcriptionLocale) { _, value in
+                    store.transcriptionLocaleIdentifier = value
+                }
+
+                Text("端末にモデルが無い言語は、初回の文字起こし時にダウンロードされます。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -146,6 +201,13 @@ struct SettingsView: View {
         inputDevices = AudioDeviceLookup.availableInputDevices()
         installedApps = InstalledAppLookup.scan()
         autoRecordEnabled = store.autoRecordEnabled
+        autoRecordConditions = store.autoRecordConditions
+
+        let timing = store.autoRecordTiming
+        startAfter = timing.startAfter
+        stopAfter = timing.stopAfter
+        maximumDuration = timing.maximumDuration
+        transcriptionLocale = store.transcriptionLocaleIdentifier
 
         // Read from the system rather than from our own defaults: macOS is the
         // authority here, and the user can revoke it in System Settings.
@@ -166,6 +228,30 @@ struct SettingsView: View {
         app.helperBundleIDs.isEmpty
             ? app.name
             : "\(app.name)  (+\(app.helperBundleIDs.count))"
+    }
+
+    /// Each toggle reads and writes one bit of the stored set.
+    private func binding(for condition: AutoRecordConditions) -> Binding<Bool> {
+        Binding(
+            get: { autoRecordConditions.contains(condition) },
+            set: { isOn in
+                if isOn {
+                    autoRecordConditions.insert(condition)
+                } else {
+                    autoRecordConditions.remove(condition)
+                }
+                store.autoRecordConditions = autoRecordConditions
+            }
+        )
+    }
+
+    private func saveTiming() {
+        store.autoRecordTiming = AutoRecordTiming(
+            startAfter: startAfter,
+            stopAfter: stopAfter,
+            maximumDuration: maximumDuration,
+            playbackThresholdDecibels: AutoRecordTiming.default.playbackThresholdDecibels
+        )
     }
 
     private func describeLoginItemStatus() -> String? {

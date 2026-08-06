@@ -24,7 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var sourceLogTimer: Timer?
 
     private var detectionTimer: Timer?
-    private var trigger = MeetingTrigger()
+    private var trigger = MeetingTrigger(timing: PreferenceStore().autoRecordTiming)
     /// Monotonic clock for the trigger. Wall time would jump on a clock change
     /// or a wake from sleep and could fire a start or stop spuriously.
     private var uptime: TimeInterval { ProcessInfo.processInfo.systemUptime }
@@ -58,6 +58,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard preferences.autoRecordEnabled else { return }
 
+        // Rebuilt from settings so a changed delay takes effect without a restart.
+        trigger = MeetingTrigger(timing: preferences.autoRecordTiming)
+
         detectionTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.sampleForMeeting() }
         }
@@ -71,7 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let sample = MeetingDetector.sample(meetingBundleIDs: preferences.meetingBundleIDs)
 
-        switch trigger.observe(meetingDetected: sample.shouldRecord, at: uptime) {
+        switch trigger.observe(meetingDetected: sample.shouldRecord(matching: preferences.autoRecordConditions), at: uptime) {
         case .none:
             break
         case .start:

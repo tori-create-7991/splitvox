@@ -202,10 +202,19 @@ enum ProbeCommand {
     /// Lets the trigger be tuned against real usage — a real meeting, and a
     /// video that must *not* fire it — before trusting it to start recordings
     /// unattended.
-    static func probeDetect(bundleIDs: [String], seconds: TimeInterval) {
+    static func probeDetect(
+        bundleIDs: [String],
+        seconds: TimeInterval,
+        conditions: AutoRecordConditions
+    ) {
         print("watching for \(Int(seconds))s — ヘッドセットの抜き差しで試してください")
         print("現在の既定入力: \(AudioDeviceLookup.defaultInputName() ?? "(不明)")")
-        print("判定: ヘッドセット(内蔵マイク以外が既定入力) かつ 設定アプリが再生中\n")
+        print("有効な条件（すべて満たす必要あり）:")
+        for c in AutoRecordConditions.all where conditions.contains(c) {
+            print("  ・\(c.label)")
+        }
+        if conditions.isEmpty { print("  （なし — 自動記録は無効）") }
+        print("")
 
         var trigger = MeetingTrigger()
         var lastState: Bool?
@@ -214,13 +223,15 @@ enum ProbeCommand {
         while ProcessInfo.processInfo.systemUptime - started < seconds {
             let now = ProcessInfo.processInfo.systemUptime
             let sample = MeetingDetector.sample(meetingBundleIDs: bundleIDs)
-            let action = trigger.observe(meetingDetected: sample.shouldRecord, at: now)
+            let action = trigger.observe(meetingDetected: sample.shouldRecord(matching: conditions), at: now)
 
-            if sample.shouldRecord != lastState || action != .none {
-                lastState = sample.shouldRecord
+            if sample.shouldRecord(matching: conditions) != lastState || action != .none {
+                lastState = sample.shouldRecord(matching: conditions)
                 let elapsed = Int(now - started)
-                let verdict = sample.shouldRecord ? "RECORD " : "-      "
+                let verdict = sample.shouldRecord(matching: conditions) ? "RECORD " : "-      "
                 print("[\(elapsed)s] \(verdict)  ヘッドセット: \(sample.headsetActive ? "○" : "×")"
+                      + "  |  実機: \(sample.physicalHeadsetActive ? "○" : "×")"
+                      + "  |  マイク: \(sample.microphoneInUse ? "○" : "×")"
                       + "  |  再生: \(sample.playing.joined(separator: ", "))")
                 if action != .none {
                     print("        -> \(action == .start ? "録音を開始する条件を満たしました" : "停止条件を満たしました")")

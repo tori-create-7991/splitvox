@@ -5,7 +5,8 @@ if let index = CommandLine.arguments.firstIndex(of: "--probe-detect") {
     let seconds = CommandLine.arguments.dropFirst(index + 1).first.flatMap(Double.init) ?? 60
     ProbeCommand.probeDetect(
         bundleIDs: PreferenceStore().meetingBundleIDs,
-        seconds: seconds
+        seconds: seconds,
+        conditions: PreferenceStore().autoRecordConditions
     )
     exit(0)
 }

@@ -57,7 +57,7 @@ final class LiveTranscriber {
         body(&_stats)
     }
 
-    init(localeIdentifier: String = Config.transcriptionLocaleIdentifier) {
+    init(localeIdentifier: String = PreferenceStore().transcriptionLocaleIdentifier) {
         self.requestedLocale = Locale(identifier: localeIdentifier)
     }
 
@@ -127,8 +127,6 @@ final class LiveTranscriber {
         try await analyzer.start(inputSequence: stream)
     }
 
-    /// Feed captured audio. Safe to call from the audio callback queue, which
-    /// is serial, so the converter is never used concurrently.
     /// Feed captured audio. Safe to call from the audio callback queue, which
     /// is serial, so the converter is never used concurrently.
     ///

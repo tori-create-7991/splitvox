@@ -111,6 +111,48 @@ enum AudioDeviceLookup {
         defaultInputDeviceID().flatMap(name(of:))
     }
 
+    /// How a device is attached: built-in, USB, Bluetooth, virtual, and so on.
+    static func transportType(of device: AudioObjectID) -> UInt32? {
+        var addr = address(kAudioDevicePropertyTransportType)
+        var value: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(device, &addr, 0, nil, &size, &value) == noErr else {
+            return nil
+        }
+        return value
+    }
+
+    /// Whether the default input is external *and* real hardware.
+    ///
+    /// Stricter than `isExternalInputActive`, which also accepts virtual
+    /// devices — Krisp and ZoomAudioDevice both register as inputs, so with the
+    /// looser check a recording can start while nothing is physically worn.
+    static func isPhysicalExternalInputActive() -> Bool {
+        guard let device = defaultInputDeviceID(),
+              let uid = uid(of: device),
+              uid != builtInMicrophoneUID,
+              let transport = transportType(of: device) else { return false }
+
+        switch transport {
+        case kAudioDeviceTransportTypeBluetooth,
+             kAudioDeviceTransportTypeBluetoothLE,
+             kAudioDeviceTransportTypeUSB,
+             kAudioDeviceTransportTypeThunderbolt,
+             kAudioDeviceTransportTypeFireWire,
+             kAudioDeviceTransportTypeDisplayPort,
+             kAudioDeviceTransportTypeHDMI:
+            return true
+        case kAudioDeviceTransportTypeBuiltIn:
+            // The headphone jack reports as built-in transport but is a
+            // different device from the internal microphone, and the UID check
+            // above has already excluded that one.
+            return true
+        default:
+            // Virtual, aggregate, and anything unrecognised.
+            return false
+        }
+    }
+
     /// The device to record the local speaker from: the user's choice when it
     /// is still present, otherwise the system default.
     static func resolveInputDevice(preferredUID: String?) -> AudioInputDevice? {

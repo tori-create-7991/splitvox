@@ -31,7 +31,7 @@ final class Transcriber {
 
     private let requestedLocale: Locale
 
-    init(localeIdentifier: String = Config.transcriptionLocaleIdentifier) {
+    init(localeIdentifier: String = PreferenceStore().transcriptionLocaleIdentifier) {
         self.requestedLocale = Locale(identifier: localeIdentifier)
     }
 

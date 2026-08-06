@@ -8,6 +8,7 @@ struct Preferences: Equatable {
     let meetingBundleIDs: [String]
     let inputDeviceUID: String?
     let autoRecordEnabled: Bool
+    let autoRecordConditions: AutoRecordConditions
 }
 
 /// User-changeable settings. `Config` holds the values fixed at build time.
@@ -21,6 +22,11 @@ struct PreferenceStore {
         static let meetingBundleIDs = "meetingBundleIDs"
         static let inputDeviceUID = "inputDeviceUID"
         static let autoRecordEnabled = "autoRecordEnabled"
+        static let autoRecordCondition = "autoRecordCondition"
+        static let startAfter = "autoRecordStartAfter"
+        static let stopAfter = "autoRecordStopAfter"
+        static let maximumDuration = "autoRecordMaximumDuration"
+        static let transcriptionLocale = "transcriptionLocale"
     }
 
     private let defaults: UserDefaults
@@ -70,11 +76,63 @@ struct PreferenceStore {
         nonmutating set { defaults.set(newValue, forKey: Key.autoRecordEnabled) }
     }
 
+    /// Which signals must hold before a recording starts.
+    ///
+    /// Stored as the raw bitmask. An absent value means "never configured" and
+    /// falls back to the default, which is not the same as an explicitly empty
+    /// set — that one disables the trigger.
+    var autoRecordConditions: AutoRecordConditions {
+        get {
+            guard defaults.object(forKey: Key.autoRecordCondition) != nil else {
+                return .default
+            }
+            return AutoRecordConditions(rawValue: defaults.integer(forKey: Key.autoRecordCondition))
+        }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.autoRecordCondition) }
+    }
+
+    /// Timing for the automatic trigger. Absent values fall back to defaults
+    /// rather than to zero, which would start and stop constantly.
+    var autoRecordTiming: AutoRecordTiming {
+        get {
+            var timing = AutoRecordTiming.default
+            if defaults.object(forKey: Key.startAfter) != nil {
+                timing.startAfter = defaults.double(forKey: Key.startAfter)
+            }
+            if defaults.object(forKey: Key.stopAfter) != nil {
+                timing.stopAfter = defaults.double(forKey: Key.stopAfter)
+            }
+            if defaults.object(forKey: Key.maximumDuration) != nil {
+                timing.maximumDuration = defaults.double(forKey: Key.maximumDuration)
+            }
+            return timing
+        }
+        nonmutating set {
+            defaults.set(newValue.startAfter, forKey: Key.startAfter)
+            defaults.set(newValue.stopAfter, forKey: Key.stopAfter)
+            defaults.set(newValue.maximumDuration, forKey: Key.maximumDuration)
+        }
+    }
+
+    /// Language the recogniser is asked for. A meeting held in another language
+    /// transcribes as noise otherwise.
+    var transcriptionLocaleIdentifier: String {
+        get {
+            let stored = defaults.string(forKey: Key.transcriptionLocale)?
+                .trimmingCharacters(in: .whitespaces)
+            return (stored?.isEmpty ?? true)
+                ? Config.transcriptionLocaleIdentifier
+                : stored!
+        }
+        nonmutating set { defaults.set(newValue, forKey: Key.transcriptionLocale) }
+    }
+
     var current: Preferences {
         Preferences(
             meetingBundleIDs: meetingBundleIDs,
             inputDeviceUID: inputDeviceUID,
-            autoRecordEnabled: autoRecordEnabled
+            autoRecordEnabled: autoRecordEnabled,
+            autoRecordConditions: autoRecordConditions
         )
     }
 

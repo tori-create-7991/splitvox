@@ -3,40 +3,53 @@ import Foundation
 /// Samples the running system for signs that something worth recording is
 /// happening.
 ///
-/// The signal is a headset plus audio playing, not "a meeting app is holding
-/// the microphone". Putting on a headset is a deliberate act that precedes a
-/// call, it happens *before* anyone speaks, and it does not depend on guessing
-/// which application counts as a meeting. Recording a video with it on is
-/// acceptable — a transcript of something you chose to listen to is not a
-/// failure.
-///
-/// Playback is still required so that simply wearing a headset in silence does
-/// not fill the disk. It is restricted to configured applications because the
-/// tap only captures those: anything else would record an empty far side.
+/// Collects every signal on each pass and lets the chosen condition decide,
+/// rather than baking one rule in. Which signal is right depends on the person:
+/// a headset is a deliberate act that happens before anyone speaks, but it
+/// cannot distinguish a real headset from a virtual audio device, and requiring
+/// the microphone is stricter at the cost of missing the opening.
 enum MeetingDetector {
 
     struct Sample {
         let headsetActive: Bool
+        let physicalHeadsetActive: Bool
+        let microphoneInUse: Bool
         let playing: [String]
 
-        /// Both conditions together. A headset alone is someone about to work;
-        /// playback alone is the speakers, which a headset user is not using.
-        var shouldRecord: Bool { headsetActive && !playing.isEmpty }
+        /// Every enabled condition must hold. More conditions means stricter.
+        ///
+        /// An empty set means the trigger is off, not that everything matches —
+        /// a set with no constraints would start recording and never stop.
+        func shouldRecord(matching conditions: AutoRecordConditions) -> Bool {
+            guard !conditions.isEmpty else { return false }
+
+            if conditions.contains(.playback) && playing.isEmpty { return false }
+            if conditions.contains(.externalInput) && !headsetActive { return false }
+            if conditions.contains(.physicalInput) && !physicalHeadsetActive { return false }
+            if conditions.contains(.microphoneInUse) && !microphoneInUse { return false }
+
+            return true
+        }
     }
 
     static func sample(meetingBundleIDs: [String]) -> Sample {
         let configured = Set(meetingBundleIDs)
 
-        // Splitvox itself plays nothing, but excluding it keeps the signal
-        // honest if that ever changes.
+        // Splitvox holds the microphone while recording, so counting itself
+        // would make the microphone condition self-sustaining and the recording
+        // would never stop.
         let excluded: Set<String> = [Config.bundleIdentifier]
 
         let playing = Set(AudioProcessLookup.bundleIDsProducingOutput())
             .intersection(configured)
             .subtracting(excluded)
 
+        let capturing = AudioProcessLookup.bundleIDsConsumingInput(excluding: excluded)
+
         return Sample(
             headsetActive: AudioDeviceLookup.isExternalInputActive(),
+            physicalHeadsetActive: AudioDeviceLookup.isPhysicalExternalInputActive(),
+            microphoneInUse: !capturing.isEmpty,
             playing: playing.sorted()
         )
     }
