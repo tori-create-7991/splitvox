@@ -13,7 +13,7 @@ import Foundation
 final class SessionLog {
 
     private let url: URL
-    private let queue = DispatchQueue(label: "com.ryo.splitvox.sessionlog")
+    private let queue = DispatchQueue(label: "io.github.tori-create-7991.splitvox.sessionlog")
     private let started = Date()
 
     init(directory: URL) {

@@ -86,6 +86,12 @@ open Splitvox.app
 SPLITVOX_SIGN_IDENTITY="任意の証明書名" bash scripts/make-app.sh
 ```
 
+### fork する場合
+
+`Sources/Splitvox/Config.swift` の `bundleIdentifier` を自分の名前空間に変更してください。
+同じままだと、**upstream と fork が同一マシンで権限と設定を共有します**（TCC は
+バンドルIDと署名の組、`UserDefaults` はバンドルIDで記録するため）。
+
 ## 初回セットアップ
 
 1. **権限** — 初回の録音時に「マイク」と「システム音声録音」の許可を求められます。両方許可してください

@@ -58,7 +58,7 @@ final class AggregateRecorder {
 
     /// The IO block runs here, so file writes are already serialised and off
     /// the real-time thread.
-    private let ioQueue = DispatchQueue(label: "com.ryo.splitvox.recorder.io")
+    private let ioQueue = DispatchQueue(label: "io.github.tori-create-7991.splitvox.recorder.io")
 
     /// Set once from the first callback, for `--probe-record` to report the
     /// buffer layout the device actually delivers.
