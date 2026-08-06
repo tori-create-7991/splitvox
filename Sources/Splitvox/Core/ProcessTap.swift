@@ -27,9 +27,18 @@ final class ProcessTap {
     /// UID used to place this tap inside an aggregate device.
     let uid: String
 
+    /// Process objects that matched the requested bundle IDs at creation time.
+    ///
+    /// A tap built against bundle IDs that resolve to nothing produces silence
+    /// while reporting success, which is indistinguishable from a working tap
+    /// on a quiet meeting.
+    let resolvedProcessCount: Int
+
     private var isValid = true
 
     init(bundleIDs: [String]) throws {
+        resolvedProcessCount = AudioProcessLookup.processObjectIDs(forBundleIDs: bundleIDs).count
+
         let description = CATapDescription()
         description.name = "Splitvox meeting tap"
 

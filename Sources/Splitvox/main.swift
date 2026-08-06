@@ -33,11 +33,14 @@ if let index = CommandLine.arguments.firstIndex(of: "--probe-live") {
     let done = DispatchSemaphore(value: 0)
     Task {
         await ProbeCommand.probeLive(
-            bundleIDs: Config.defaultMeetingBundleIDs,
-            preferredInputUID: nil,
+            // Use the saved settings, not the built-in defaults, so this probe
+            // exercises exactly what the app runs with.
+            bundleIDs: PreferenceStore().meetingBundleIDs,
+            preferredInputUID: PreferenceStore().inputDeviceUID,
             seconds: seconds,
             outputDirectory: FileManager.default.temporaryDirectory
-                .appendingPathComponent("splitvox-live", isDirectory: true)
+                .appendingPathComponent("splitvox-live", isDirectory: true),
+            pollProcessesWhileRecording: CommandLine.arguments.contains("--poll")
         )
         done.signal()
     }

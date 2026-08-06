@@ -18,6 +18,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var liveSystemAudio: LiveTranscriber?
     private var accumulator = TranscriptAccumulator()
 
+    private var sessionLog: SessionLog?
+    /// Samples audio sources during a recording, so a silent far side can be
+    /// explained afterwards instead of guessed at.
+    private var sourceLogTimer: Timer?
+
     private var detectionTimer: Timer?
     private var trigger = MeetingTrigger()
     /// Monotonic clock for the trigger. Wall time would jump on a clock change
@@ -40,10 +45,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Automatic recording
 
-    /// Poll for meeting conditions. Cheap enough to leave running: it reads
-    /// process properties, with no audio device involved.
+    /// Poll for meeting conditions, but only while the feature is on.
+    ///
+    /// The timer is not created at all when auto-recording is off, rather than
+    /// created and short-circuited. Enumerating Core Audio processes is
+    /// currently a suspect in a silent-tap bug, and a timer that runs but does
+    /// nothing is indistinguishable from one that is off — which makes it
+    /// useless for isolating the cause.
     private func startDetectionTimer() {
         detectionTimer?.invalidate()
+        detectionTimer = nil
+
+        guard preferences.autoRecordEnabled else { return }
+
         detectionTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.sampleForMeeting() }
         }
@@ -240,6 +254,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             sessionDirectory = directory
             lastTranscriptURL = RecordingStore.transcriptFileURL(in: directory)
 
+            let log = SessionLog(directory: directory)
+            sessionLog = log
+            log.write("recording started")
+            log.write("input device: \(newRecorder.inputDeviceName)")
+            log.write("channel layout: mic \(newRecorder.layout.microphoneChannels), "
+                      + "tap \(newRecorder.layout.systemAudioChannels)")
+            log.write("configured bundle IDs: \(settings.meetingBundleIDs.joined(separator: ", "))")
+            log.write("tap matched \(newRecorder.resolvedProcessCount) process object(s)")
+            if let format = newRecorder.tapStreamDescription {
+                log.write("tap format: \(format.mSampleRate) Hz, \(format.mChannelsPerFrame) ch")
+            }
+            log.logAudioSources(configured: settings.meetingBundleIDs)
+
             // Started before recording so the opening seconds are transcribed
             // too. A failure here leaves recording intact: the audio files are
             // still written and can be transcribed afterwards.
@@ -255,6 +282,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Tell the trigger, so a manual start is not followed by an
             // automatic one, and so the stop countdown is measured from here.
             trigger.recordingBecameActive(at: uptime)
+            startSourceLogging(configured: settings.meetingBundleIDs)
         } catch {
             tearDownLiveTranscription()
             session.fail(error.localizedDescription)
@@ -295,6 +323,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Sample audio sources periodically for the whole recording.
+    ///
+    /// A single check at the start is not enough: an application can begin
+    /// playing minutes in — Zoom starts its meeting host process when the call
+    /// connects, not when the app launches.
+    private func startSourceLogging(configured: [String]) {
+        sourceLogTimer?.invalidate()
+        sourceLogTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.sessionLog?.logAudioSources(configured: configured)
+            }
+        }
+    }
+
+    private func stopSourceLogging() {
+        sourceLogTimer?.invalidate()
+        sourceLogTimer = nil
+    }
+
     private func tearDownLiveTranscription() {
         recorder?.onMicrophoneBuffer = nil
         recorder?.onSystemAudioBuffer = nil
@@ -318,9 +365,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func stopRecording() {
         guard session.state == .recording, let directory = sessionDirectory else { return }
 
+        // Last sample before teardown: whatever was playing at the end is the
+        // best evidence of what should have been captured.
+        sessionLog?.logAudioSources(configured: preferences.meetingBundleIDs)
+        stopSourceLogging()
+
+        if let recorder {
+            sessionLog?.write("callbacks: \(recorder.callbackCount), "
+                              + "with tap audio: \(recorder.tapNonSilentCallbacks), "
+                              + "buffer layout: \(recorder.observedBufferLayout)")
+        }
+
         recorder?.stop()
         recorder = nil
         _ = session.stop()
+        sessionLog?.write("recording stopped")
         updateStatusItem()
 
         Task { await finishSession(directory: directory) }
@@ -341,6 +400,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 updateStatusItem()
 
                 warnIfFarSideSilent(directory: directory)
+                sessionLog?.write("done — \(accumulator.me.count + accumulator.them.count) segments")
+                sessionLog?.flush()
+                sessionLog = nil
 
                 if let url = lastTranscriptURL {
                     NSWorkspace.shared.activateFileViewerSelecting([url])
@@ -404,9 +466,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func warnIfFarSideSilent(directory: URL) {
         let url = RecordingStore.systemAudioFileURL(in: directory)
         guard let analysis = try? AudioAnalysis.analyse(url) else { return }
+
+        sessionLog?.write(String(format: "them level: %.1f dBFS",
+                                 AudioAnalysis.decibels(analysis.overallRMS)))
+
         guard analysis.overallRMS <= 0 || AudioAnalysis.decibels(analysis.overallRMS) < -70 else {
             return
         }
+        sessionLog?.write("FAR SIDE SILENT — 上の 'NOT captured' 行を確認してください")
 
         let configured = preferences.meetingBundleIDs.joined(separator: "\n")
         showMessage(
@@ -460,6 +527,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // status item alone.
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
+
+        // Picking up a change to the auto-record toggle needs the timer rebuilt,
+        // and closing Settings is the moment that change is finished.
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: settingsWindow,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.startDetectionTimer() }
+        }
     }
 
     @objc private func quit() {

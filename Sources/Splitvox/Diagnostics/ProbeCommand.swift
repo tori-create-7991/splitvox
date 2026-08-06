@@ -296,7 +296,8 @@ enum ProbeCommand {
         bundleIDs: [String],
         preferredInputUID: String?,
         seconds: TimeInterval,
-        outputDirectory: URL
+        outputDirectory: URL,
+        pollProcessesWhileRecording: Bool = false
     ) async {
         do {
             try FileManager.default.createDirectory(
@@ -343,6 +344,9 @@ enum ProbeCommand {
                 systemAudioURL: RecordingStore.systemAudioFileURL(in: outputDirectory)
             )
 
+            if pollProcessesWhileRecording {
+                print("(録音中も Core Audio のプロセス列挙を続けます — アプリ本体と同じ条件)")
+            }
             print("recording \(Int(seconds))s — speak, and play audio in the meeting app\n")
 
             var lastCount = -1
@@ -352,6 +356,15 @@ enum ProbeCommand {
                     lastCount = snapshot.count
                     print("  [\(remaining)s left] \(snapshot.count) segments so far")
                 }
+
+                // Reproduces what the menu bar app does throughout a recording:
+                // its detection and logging timers keep enumerating audio
+                // processes. If that is what silences the tap, it shows up here.
+                if pollProcessesWhileRecording {
+                    _ = MeetingDetector.sample(meetingBundleIDs: bundleIDs)
+                    _ = AudioProcessLookup.bundleIDsProducingOutput()
+                }
+
                 // Task.sleep, not Thread.sleep: blocking the cooperative pool
                 // here would stall the transcribers running on it.
                 try? await Task.sleep(for: .seconds(1))

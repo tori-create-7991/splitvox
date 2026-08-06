@@ -69,6 +69,18 @@ final class AggregateRecorder {
     private(set) var writeFailures = 0
     private(set) var firstWriteError: String?
 
+    /// Callbacks seen, and how many of those carried any non-zero sample on the
+    /// tap channels.
+    ///
+    /// Separates "the tap delivered nothing" from "the tap delivered silence",
+    /// which look identical in the resulting file but have different causes.
+    private(set) var callbackCount = 0
+    private(set) var tapNonSilentCallbacks = 0
+
+    /// Diagnostics from the tap, surfaced for the session log.
+    var resolvedProcessCount: Int { tap.resolvedProcessCount }
+    var tapStreamDescription: AudioStreamBasicDescription? { tap.streamDescription }
+
     /// Live taps on each side's audio, for transcribing while recording.
     ///
     /// Separate from the files rather than replacing them: if transcription
@@ -205,12 +217,50 @@ final class AggregateRecorder {
             observedBufferLayout = buffers.map { Int($0.mNumberChannels) }
         }
 
+        callbackCount += 1
+        if containsAudio(buffers, channels: layout.systemAudioChannels) {
+            tapNonSilentCallbacks += 1
+        }
+
         if let file = microphoneFile {
             write(buffers, channels: layout.microphoneChannels, to: file, live: onMicrophoneBuffer)
         }
         if let file = systemAudioFile {
             write(buffers, channels: layout.systemAudioChannels, to: file, live: onSystemAudioBuffer)
         }
+    }
+
+    /// Whether any sample on the given device channels is non-zero.
+    ///
+    /// Checks the raw callback rather than the written file, so a tap that
+    /// delivers digital silence can be told apart from one that delivers
+    /// nothing at all.
+    private func containsAudio(
+        _ buffers: UnsafeMutableAudioBufferListPointer,
+        channels: Range<Int>
+    ) -> Bool {
+        var channelBase = 0
+
+        for buffer in buffers {
+            let channelsInBuffer = Int(buffer.mNumberChannels)
+            defer { channelBase += channelsInBuffer }
+
+            guard let raw = buffer.mData else { continue }
+            let overlap = max(channelBase, channels.lowerBound)
+                ..< min(channelBase + channelsInBuffer, channels.upperBound)
+            guard !overlap.isEmpty else { continue }
+
+            let samples = raw.assumingMemoryBound(to: Float.self)
+            let frames = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size / channelsInBuffer
+
+            for frame in 0..<frames {
+                for channel in overlap where samples[frame * channelsInBuffer + (channel - channelBase)] != 0 {
+                    return true
+                }
+            }
+        }
+
+        return false
     }
 
     private func write(
