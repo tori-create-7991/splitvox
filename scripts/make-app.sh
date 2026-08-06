@@ -25,7 +25,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <dict>
     <key>CFBundleName</key><string>Splitvox</string>
     <key>CFBundleDisplayName</key><string>Splitvox</string>
-    <key>CFBundleIdentifier</key><string>com.ryo.splitvox</string>
+    <key>CFBundleIdentifier</key><string>io.github.tori-create-7991.splitvox</string>
     <key>CFBundleExecutable</key><string>Splitvox</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.1.0</string>

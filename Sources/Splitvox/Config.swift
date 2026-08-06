@@ -2,7 +2,18 @@ import Foundation
 
 /// Build-time constants. Anything the user can change lives in `Storage/`.
 enum Config {
-    static let bundleIdentifier = "com.ryo.splitvox"
+    /// A namespace the project actually controls, via the GitHub account.
+    ///
+    /// macOS does not verify domain ownership, so any string works — but this
+    /// one has to be unique per build in practice. TCC keys microphone and
+    /// audio-capture consent to the bundle ID plus the signature, and
+    /// `UserDefaults.standard` keys its domain to the bundle ID alone. Two
+    /// builds sharing an identifier therefore share one permission entry and
+    /// one settings store.
+    ///
+    /// **Forks should change this.** Leaving it means the fork and upstream
+    /// cannot both hold their own permissions on the same machine.
+    static let bundleIdentifier = "io.github.tori-create-7991.splitvox"
 
     /// Applications whose output audio is captured by the process tap.
     ///

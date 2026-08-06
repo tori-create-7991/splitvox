@@ -26,7 +26,7 @@ final class AggregateDevice {
     private var isValid = true
 
     init(tapUID: String, inputDeviceUID: String) throws {
-        let generatedUID = "com.ryo.splitvox.aggregate.\(UUID().uuidString)"
+        let generatedUID = "io.github.tori-create-7991.splitvox.aggregate.\(UUID().uuidString)"
 
         let description: [String: Any] = [
             kAudioAggregateDeviceNameKey: "Splitvox Capture",
