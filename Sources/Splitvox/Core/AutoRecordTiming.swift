@@ -22,27 +22,22 @@ struct AutoRecordTiming: Equatable {
     /// Upper bound on a single recording, as a runaway guard.
     ///
     /// Without it, an application left playing audio can record until the disk
-    /// fills — roughly a gigabyte an hour.
-    var maximumDuration: TimeInterval
-
-    /// Level below which playback is treated as silence, in dBFS.
+    /// fills — roughly a gigabyte an hour. `MeetingTrigger` holds the trigger
+    /// closed after the cap fires until the conditions lapse, so this really
+    /// does bound usage rather than splitting it into instalments.
     ///
-    /// `IsRunningOutput` is a boolean and says nothing about loudness, so a
-    /// notification chirp counts the same as a meeting. This ignores anything
-    /// quieter than the threshold.
-    var playbackThresholdDecibels: Double
+    /// Measured against `systemUptime`, so it bounds awake time, not wall time.
+    var maximumDuration: TimeInterval
 
     static let `default` = AutoRecordTiming(
         startAfter: 5,
         stopAfter: 30,
-        maximumDuration: 4 * 60 * 60,
-        playbackThresholdDecibels: -50
+        maximumDuration: 4 * 60 * 60
     )
 
     static let startChoices: [TimeInterval] = [0, 3, 5, 10, 30]
     static let stopChoices: [TimeInterval] = [10, 30, 60, 120, 300]
     static let maximumChoices: [TimeInterval] = [30 * 60, 60 * 60, 2 * 60 * 60, 4 * 60 * 60, 8 * 60 * 60]
-    static let thresholdChoices: [Double] = [-70, -60, -50, -40, -30]
 
     static func describeSeconds(_ value: TimeInterval) -> String {
         if value == 0 { return "すぐに" }
@@ -51,11 +46,4 @@ struct AutoRecordTiming: Equatable {
         return "\(Int(value / 3600)) 時間"
     }
 
-    static func describeThreshold(_ value: Double) -> String {
-        switch value {
-        case -70: return "\(Int(value)) dBFS（ごく小さな音も拾う）"
-        case -30: return "\(Int(value)) dBFS（はっきりした音のみ）"
-        default: return "\(Int(value)) dBFS"
-        }
-    }
 }

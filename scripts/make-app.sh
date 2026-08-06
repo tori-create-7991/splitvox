@@ -31,7 +31,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleShortVersionString</key><string>0.1.0</string>
     <key>LSMinimumSystemVersion</key><string>26.0</string>
     <key>LSUIElement</key><true/>
-    <key>NSMicrophoneUsageDescription</key><string>会議中のあなたの発言を録音し、端末内で文字起こしするために使用します。音声が外部に送信されることはありません。</string>
+    <key>NSMicrophoneUsageDescription</key><string>会議中のあなたの発言を録音し、端末内で文字起こしするために使用します。設定で自動記録を有効にした場合、会議の検出により自動的に開始することがあります。音声が外部に送信されることはありません。</string>
     <key>NSSpeechRecognitionUsageDescription</key><string>録音した会議音声を端末内で文字起こしするために使用します。音声が外部に送信されることはありません。</string>
     <!--
       Required for the Core Audio process tap. Without this key macOS never
@@ -39,7 +39,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
       delivers digital silence forever. Verified against Zoom and Krisp, which
       both ship this key to capture other applications' audio.
     -->
-    <key>NSAudioCaptureUsageDescription</key><string>会議相手の音声を録音し、端末内で文字起こしするために使用します。音声が外部に送信されることはありません。</string>
+    <key>NSAudioCaptureUsageDescription</key><string>会議相手の音声を録音し、端末内で文字起こしするために使用します。設定で自動記録を有効にした場合、会議の検出により自動的に開始することがあります。音声が外部に送信されることはありません。</string>
 </dict>
 </plist>
 PLIST

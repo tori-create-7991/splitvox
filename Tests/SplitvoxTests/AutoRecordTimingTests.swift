@@ -20,12 +20,6 @@ struct AutoRecordTimingTests {
         #expect(AutoRecordTiming.describeSeconds(7200) == "2 時間")
     }
 
-    @Test("しきい値の両端には意味の説明が付く")
-    func thresholdExtremesAreExplained() {
-        #expect(AutoRecordTiming.describeThreshold(-70).contains("ごく小さな音"))
-        #expect(AutoRecordTiming.describeThreshold(-30).contains("はっきりした音"))
-        #expect(AutoRecordTiming.describeThreshold(-50) == "-50 dBFS")
-    }
 
     @Test("既定値は選択肢に含まれている")
     func defaultsAreSelectable() {
@@ -34,7 +28,6 @@ struct AutoRecordTimingTests {
         #expect(AutoRecordTiming.startChoices.contains(timing.startAfter))
         #expect(AutoRecordTiming.stopChoices.contains(timing.stopAfter))
         #expect(AutoRecordTiming.maximumChoices.contains(timing.maximumDuration))
-        #expect(AutoRecordTiming.thresholdChoices.contains(timing.playbackThresholdDecibels))
     }
 }
 
@@ -52,14 +45,71 @@ struct MeetingTriggerMaximumTests {
         #expect(trigger.observe(meetingDetected: true, at: 105) == .stop)
     }
 
-    @Test("最大時間で停止した後も次の録音を開始できる")
-    func canRestartAfterMaximumDuration() {
+    /// 上限は「暴走防止」として実効でなければならない。停止直後に再開できると
+    /// 4時間ごとのファイルが延々と積み上がり、ディスクは同じ速度で埋まる。
+    @Test("上限で停止した後は条件が途切れるまで再開しない")
+    func doesNotRestartUntilConditionsLapse() {
         var trigger = MeetingTrigger(startAfter: 5, stopAfter: 30, maximumDuration: 100)
         _ = trigger.observe(meetingDetected: true, at: 0)
         _ = trigger.observe(meetingDetected: true, at: 5)
         _ = trigger.observe(meetingDetected: true, at: 105)
 
-        _ = trigger.observe(meetingDetected: true, at: 106)
-        #expect(trigger.observe(meetingDetected: true, at: 111) == .start)
+        // 条件が続いている限り再開しない。
+        #expect(trigger.observe(meetingDetected: true, at: 200) == .none)
+        #expect(trigger.observe(meetingDetected: true, at: 10_000) == .none)
+    }
+
+    @Test("条件が一度途切れれば次の録音を開始できる")
+    func restartsOnceConditionsLapse() {
+        var trigger = MeetingTrigger(startAfter: 5, stopAfter: 30, maximumDuration: 100)
+        _ = trigger.observe(meetingDetected: true, at: 0)
+        _ = trigger.observe(meetingDetected: true, at: 5)
+        _ = trigger.observe(meetingDetected: true, at: 105)
+
+        _ = trigger.observe(meetingDetected: false, at: 110)
+        _ = trigger.observe(meetingDetected: true, at: 120)
+
+        #expect(trigger.observe(meetingDetected: true, at: 125) == .start)
+    }
+
+    /// 上限と停止条件が同時に成立しても .stop は1回だけ。
+    @Test("上限と停止条件が重なっても停止は1度だけ")
+    func capAndLapseDoNotStopTwice() {
+        var trigger = MeetingTrigger(startAfter: 5, stopAfter: 30, maximumDuration: 100)
+        _ = trigger.observe(meetingDetected: true, at: 0)
+        _ = trigger.observe(meetingDetected: true, at: 5)
+
+        #expect(trigger.observe(meetingDetected: false, at: 105) == .stop)
+        #expect(trigger.observe(meetingDetected: false, at: 200) == .none)
+    }
+
+    /// 設定ウィンドウを閉じるたびにトリガーを作り直すと、録音中の状態が消えて
+    /// 上限の計時がリセットされ、停止も二度と発火しなくなっていた。
+    @Test("時間設定を差し替えても録音中の状態は保たれる")
+    func adoptingTimingPreservesRunState() {
+        var trigger = MeetingTrigger(startAfter: 5, stopAfter: 30, maximumDuration: 100)
+        _ = trigger.observe(meetingDetected: true, at: 0)
+        _ = trigger.observe(meetingDetected: true, at: 5)
+
+        var updated = trigger.adopting(
+            timing: AutoRecordTiming(startAfter: 5, stopAfter: 30, maximumDuration: 100)
+        )
+
+        #expect(updated.isCurrentlyRecording)
+        // 計時が引き継がれているので、作り直しても上限は元の開始時刻から測る。
+        #expect(updated.observe(meetingDetected: true, at: 105) == .stop)
+    }
+
+    @Test("差し替え後は新しい閾値が使われる")
+    func adoptingTimingAppliesNewThresholds() {
+        var trigger = MeetingTrigger(startAfter: 5, stopAfter: 30, maximumDuration: 100)
+        _ = trigger.observe(meetingDetected: true, at: 0)
+
+        var updated = trigger.adopting(
+            timing: AutoRecordTiming(startAfter: 30, stopAfter: 30, maximumDuration: 100)
+        )
+
+        #expect(updated.observe(meetingDetected: true, at: 10) == .none)
+        #expect(updated.observe(meetingDetected: true, at: 30) == .start)
     }
 }

@@ -42,9 +42,13 @@ final class SessionLog {
     ///
     /// The gap between those two lists is the single most common cause of a
     /// silent recording, and it is invisible unless captured while it happens.
-    func logAudioSources(configured: [String]) {
+    /// Excluded applications are omitted entirely. A user who excluded an app
+    /// asked not to have it observed; honouring that in the trigger while
+    /// writing it to disk every 15 seconds would be inconsistent.
+    func logAudioSources(configured: [String], excluded: [String] = []) {
         let playing = Set(AudioProcessLookup.bundleIDsProducingOutput())
             .subtracting([Config.bundleIdentifier])
+            .filter { !MeetingDetector.isExcluded($0, by: excluded) }
 
         let captured = playing.intersection(configured).sorted()
         let missed = playing.subtracting(configured).sorted()

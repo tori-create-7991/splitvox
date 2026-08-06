@@ -205,30 +205,42 @@ enum ProbeCommand {
     static func probeDetect(
         bundleIDs: [String],
         seconds: TimeInterval,
-        conditions: AutoRecordConditions
+        conditions: AutoRecordConditions,
+        excludedBundleIDs: [String],
+        timing: AutoRecordTiming
     ) {
         print("watching for \(Int(seconds))s — ヘッドセットの抜き差しで試してください")
         print("現在の既定入力: \(AudioDeviceLookup.defaultInputName() ?? "(不明)")")
         print("有効な条件（すべて満たす必要あり）:")
-        for c in AutoRecordConditions.all where conditions.contains(c) {
+        for c in AutoRecordConditions.orderedOptions where conditions.contains(c) {
             print("  ・\(c.label)")
         }
         if conditions.isEmpty { print("  （なし — 自動記録は無効）") }
+        print("開始まで \(AutoRecordTiming.describeSeconds(timing.startAfter)) / "
+              + "停止まで \(AutoRecordTiming.describeSeconds(timing.stopAfter)) / "
+              + "上限 \(AutoRecordTiming.describeSeconds(timing.maximumDuration))")
+        if !excludedBundleIDs.isEmpty {
+            print("除外: \(excludedBundleIDs.joined(separator: ", "))")
+        }
         print("")
 
-        var trigger = MeetingTrigger()
+        var trigger = MeetingTrigger(timing: timing)
         var lastState: Bool?
         let started = ProcessInfo.processInfo.systemUptime
 
         while ProcessInfo.processInfo.systemUptime - started < seconds {
             let now = ProcessInfo.processInfo.systemUptime
-            let sample = MeetingDetector.sample(meetingBundleIDs: bundleIDs)
+            let sample = MeetingDetector.sample(
+                meetingBundleIDs: bundleIDs,
+                excludedBundleIDs: excludedBundleIDs
+            )
             let action = trigger.observe(meetingDetected: sample.shouldRecord(matching: conditions), at: now)
 
-            if sample.shouldRecord(matching: conditions) != lastState || action != .none {
-                lastState = sample.shouldRecord(matching: conditions)
+            let matched = sample.shouldRecord(matching: conditions)
+            if matched != lastState || action != .none {
+                lastState = matched
                 let elapsed = Int(now - started)
-                let verdict = sample.shouldRecord(matching: conditions) ? "RECORD " : "-      "
+                let verdict = matched ? "RECORD " : "-      "
                 print("[\(elapsed)s] \(verdict)  ヘッドセット: \(sample.headsetActive ? "○" : "×")"
                       + "  |  実機: \(sample.physicalHeadsetActive ? "○" : "×")"
                       + "  |  マイク: \(sample.microphoneInUse ? "○" : "×")"
@@ -332,8 +344,9 @@ enum ProbeCommand {
             print("tap format:   \(systemAudioFormat.channelCount) ch @ \(systemAudioFormat.sampleRate) Hz")
 
             let collector = LiveCollector()
-            let microphone = LiveTranscriber()
-            let systemAudio = LiveTranscriber()
+            let locale = PreferenceStore().transcriptionLocaleIdentifier
+            let microphone = LiveTranscriber(localeIdentifier: locale)
+            let systemAudio = LiveTranscriber(localeIdentifier: locale)
 
             microphone.onSegment = { collector.add($0, from: .me) }
             systemAudio.onSegment = { collector.add($0, from: .them) }
@@ -438,7 +451,9 @@ enum ProbeCommand {
     /// Runs the whole downstream half of the pipeline against a recording that
     /// already exists, so transcription can be checked without recording again.
     static func probeTranscribe(directory: URL) async {
-        let transcriber = Transcriber()
+        let transcriber = Transcriber(
+            localeIdentifier: PreferenceStore().transcriptionLocaleIdentifier
+        )
 
         do {
             let locale = try await transcriber.resolvedLocale()

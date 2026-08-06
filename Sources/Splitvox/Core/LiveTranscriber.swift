@@ -57,7 +57,7 @@ final class LiveTranscriber {
         body(&_stats)
     }
 
-    init(localeIdentifier: String = PreferenceStore().transcriptionLocaleIdentifier) {
+    init(localeIdentifier: String = Config.transcriptionLocaleIdentifier) {
         self.requestedLocale = Locale(identifier: localeIdentifier)
     }
 

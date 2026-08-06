@@ -34,36 +34,66 @@ enum MeetingDetector {
 
     /// Whether a bundle ID falls under an exclusion.
     ///
+    /// Case-insensitive: a user typing `Notion.id` must not silently get an
+    /// entry that never matches.
+    ///
     /// Prefix match on dot boundaries, so excluding `notion.id` also covers
     /// `notion.id.helper` — the helper is usually what plays the notification
     /// chime, and listing every one by hand is not reasonable. The boundary
     /// check keeps `notion.identity.other` from being caught by it.
     static func isExcluded(_ bundleID: String, by excluded: [String]) -> Bool {
-        excluded.contains { pattern in
-            bundleID == pattern || bundleID.hasPrefix(pattern + ".")
+        let subject = bundleID.lowercased()
+        return excluded.contains { pattern in
+            let normalised = pattern.lowercased()
+            guard !normalised.isEmpty else { return false }
+            return subject == normalised || subject.hasPrefix(normalised + ".")
         }
     }
 
-    static func sample(meetingBundleIDs: [String], excludedBundleIDs: [String] = []) -> Sample {
-        let configured = Set(meetingBundleIDs)
+    /// The include/exclude filtering, separated from the Core Audio calls so it
+    /// can be tested. Previously this lived inline and the exclusion filter had
+    /// no end-to-end coverage — deleting it failed nothing.
+    static func filterPlaying(
+        producing: [String],
+        configured: [String],
+        excluded: [String]
+    ) -> [String] {
+        Set(producing)
+            .intersection(Set(configured))
+            .subtracting([Config.bundleIdentifier])
+            .filter { !isExcluded($0, by: excluded) }
+            .sorted()
+    }
 
+    /// Microphone holders that count toward the trigger.
+    ///
+    /// Exclusions apply here too. Without it, an app the user excluded still
+    /// satisfies `.microphoneInUse` — and with `.playback` unchecked that is the
+    /// only condition, so Siri or an excluded app would start a recording.
+    static func filterCapturing(_ capturing: [String], excluded: [String]) -> [String] {
+        capturing
+            .filter { $0 != Config.bundleIdentifier }
+            .filter { !isExcluded($0, by: excluded) }
+            .sorted()
+    }
+
+    static func sample(meetingBundleIDs: [String], excludedBundleIDs: [String] = []) -> Sample {
         // Splitvox holds the microphone while recording, so counting itself
         // would make the microphone condition self-sustaining and the recording
         // would never stop.
-        let excluded: Set<String> = [Config.bundleIdentifier]
-
-        let playing = Set(AudioProcessLookup.bundleIDsProducingOutput())
-            .intersection(configured)
-            .subtracting(excluded)
-            .filter { !isExcluded($0, by: excludedBundleIDs) }
-
-        let capturing = AudioProcessLookup.bundleIDsConsumingInput(excluding: excluded)
+        let capturing = AudioProcessLookup.bundleIDsConsumingInput(
+            excluding: [Config.bundleIdentifier]
+        )
 
         return Sample(
             headsetActive: AudioDeviceLookup.isExternalInputActive(),
             physicalHeadsetActive: AudioDeviceLookup.isPhysicalExternalInputActive(),
-            microphoneInUse: !capturing.isEmpty,
-            playing: playing.sorted()
+            microphoneInUse: !filterCapturing(capturing, excluded: excludedBundleIDs).isEmpty,
+            playing: filterPlaying(
+                producing: AudioProcessLookup.bundleIDsProducingOutput(),
+                configured: meetingBundleIDs,
+                excluded: excludedBundleIDs
+            )
         )
     }
 }

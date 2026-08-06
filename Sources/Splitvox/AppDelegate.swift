@@ -17,6 +17,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var liveMicrophone: LiveTranscriber?
     private var liveSystemAudio: LiveTranscriber?
     private var accumulator = TranscriptAccumulator()
+    /// Whether the current run was started by the trigger rather than by the
+    /// user. Modal dialogs must never block an unattended machine.
+    private var currentRunWasAutomatic = false
 
     private var sessionLog: SessionLog?
     /// Samples audio sources during a recording, so a silent far side can be
@@ -24,7 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var sourceLogTimer: Timer?
 
     private var detectionTimer: Timer?
-    private var trigger = MeetingTrigger(timing: PreferenceStore().autoRecordTiming)
+    private var trigger = MeetingTrigger(timing: .default)
     /// Monotonic clock for the trigger. Wall time would jump on a clock change
     /// or a wake from sleep and could fire a start or stop spuriously.
     private var uptime: TimeInterval { ProcessInfo.processInfo.systemUptime }
@@ -58,8 +61,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard preferences.autoRecordEnabled else { return }
 
-        // Rebuilt from settings so a changed delay takes effect without a restart.
-        trigger = MeetingTrigger(timing: preferences.autoRecordTiming)
+        // Adopt the new timing without discarding run state. Replacing the
+        // trigger outright would forget an in-flight recording, restarting the
+        // cap clock every time the settings window closes.
+        trigger = trigger.adopting(timing: preferences.autoRecordTiming)
 
         detectionTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.sampleForMeeting() }
@@ -82,6 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             break
         case .start:
             guard session.state == .idle else { return }
+            currentRunWasAutomatic = true
             startRecording()
         case .stop:
             guard session.state == .recording else { return }
@@ -94,6 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func toggleRecording() {
         switch session.state {
         case .idle:
+            currentRunWasAutomatic = false
             startRecording()
         case .recording:
             stopRecording()
@@ -197,6 +204,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         menu.addItem(.separator())
+        menu.addItem(
+            NSMenuItem(
+                title: "録音フォルダを開く",
+                action: #selector(openRecordingsFolder),
+                keyEquivalent: ""
+            )
+        )
         menu.addItem(NSMenuItem(title: "設定…", action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(NSMenuItem(title: "終了", action: #selector(quit), keyEquivalent: "q"))
 
@@ -239,7 +253,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard await requestMicrophoneAccess() else {
             session.fail("マイクへのアクセスが許可されていません")
             updateStatusItem()
-            showMessage(
+            report(
                 "マイクへのアクセスが許可されていません。\n\n"
                     + "システム設定 → プライバシーとセキュリティ → マイク で Splitvox を ON に"
                     + "してください。"
@@ -249,10 +263,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let settings = preferences.current
 
+        if let shortage = describeInsufficientSpace() {
+            session.fail(shortage)
+            trigger.recordingBecameInactive(at: uptime)
+            updateStatusItem()
+            report(shortage)
+            return
+        }
+
         do {
             let directory = try store.createSessionDirectory(startedAt: Date())
+            // Exclusions apply to capture, not only to the trigger. A section
+            // titled 除外するアプリ that still records the app would be lying.
+            let capturedBundleIDs = settings.meetingBundleIDs.filter {
+                !MeetingDetector.isExcluded($0, by: preferences.excludedBundleIDs)
+            }
+
             let newRecorder = try AggregateRecorder(
-                bundleIDs: settings.meetingBundleIDs,
+                bundleIDs: capturedBundleIDs,
                 preferredInputUID: settings.inputDeviceUID
             )
 
@@ -266,12 +294,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             log.write("input device: \(newRecorder.inputDeviceName)")
             log.write("channel layout: mic \(newRecorder.layout.microphoneChannels), "
                       + "tap \(newRecorder.layout.systemAudioChannels)")
-            log.write("configured bundle IDs: \(settings.meetingBundleIDs.joined(separator: ", "))")
+            log.write("configured bundle IDs: \(capturedBundleIDs.joined(separator: ", "))")
+            if !preferences.excludedBundleIDs.isEmpty {
+                log.write("excluded: \(preferences.excludedBundleIDs.joined(separator: ", "))")
+            }
             log.write("tap matched \(newRecorder.resolvedProcessCount) process object(s)")
             if let format = newRecorder.tapStreamDescription {
                 log.write("tap format: \(format.mSampleRate) Hz, \(format.mChannelsPerFrame) ch")
             }
-            log.logAudioSources(configured: settings.meetingBundleIDs)
+            log.logAudioSources(configured: capturedBundleIDs, excluded: preferences.excludedBundleIDs)
 
             // Started before recording so the opening seconds are transcribed
             // too. A failure here leaves recording intact: the audio files are
@@ -288,11 +319,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Tell the trigger, so a manual start is not followed by an
             // automatic one, and so the stop countdown is measured from here.
             trigger.recordingBecameActive(at: uptime)
-            startSourceLogging(configured: settings.meetingBundleIDs)
+            startSourceLogging(configured: capturedBundleIDs, excluded: preferences.excludedBundleIDs)
         } catch {
             tearDownLiveTranscription()
             session.fail(error.localizedDescription)
-            showMessage("録音を開始できませんでした。\n\n\(error.localizedDescription)")
+            report("録音を開始できませんでした。\n\n\(error.localizedDescription)")
         }
 
         updateStatusItem()
@@ -303,8 +334,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               let systemAudioFormat = recorder.systemAudioFormat else { return }
 
         do {
-            let microphone = LiveTranscriber()
-            let systemAudio = LiveTranscriber()
+            // Locale passed in explicitly: Core must not read Storage.
+            let locale = preferences.transcriptionLocaleIdentifier
+            let microphone = LiveTranscriber(localeIdentifier: locale)
+            let systemAudio = LiveTranscriber(localeIdentifier: locale)
 
             microphone.onSegment = { [weak self] segment in
                 Task { @MainActor in self?.appendSegment(segment, from: .me) }
@@ -334,11 +367,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// A single check at the start is not enough: an application can begin
     /// playing minutes in — Zoom starts its meeting host process when the call
     /// connects, not when the app launches.
-    private func startSourceLogging(configured: [String]) {
+    /// Refuses to start when the volume cannot hold the maximum session.
+    ///
+    /// Without this the WAVs simply truncate as the disk fills: writes fail
+    /// silently, live transcription keeps producing text, and the session ends
+    /// looking successful.
+    private func describeInsufficientSpace() -> String? {
+        let directory = RecordingStore.defaultBaseDirectory()
+        guard let values = try? directory.resourceValues(
+            forKeys: [.volumeAvailableCapacityForImportantUsageKey]
+        ), let available = values.volumeAvailableCapacityForImportantUsage else {
+            return nil
+        }
+
+        // Roughly 1 GB per hour across both tracks, plus a margin.
+        let hours = preferences.autoRecordTiming.maximumDuration / 3600
+        let required = Int64((hours + 1) * 1_000_000_000)
+        guard available < required else { return nil }
+
+        let availableGB = Double(available) / 1_000_000_000
+        let requiredGB = Double(required) / 1_000_000_000
+        return String(
+            format: "ディスクの空き容量が足りません（空き %.1f GB / 必要 %.0f GB）。\n\n"
+                + "録音は1時間あたり約1GBを消費します。"
+                + "録音フォルダの古いセッションを削除してください。",
+            availableGB, requiredGB
+        )
+    }
+
+    private func startSourceLogging(configured: [String], excluded: [String]) {
         sourceLogTimer?.invalidate()
         sourceLogTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                self?.sessionLog?.logAudioSources(configured: configured)
+                self?.sessionLog?.logAudioSources(configured: configured, excluded: excluded)
             }
         }
     }
@@ -373,9 +434,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Last sample before teardown: whatever was playing at the end is the
         // best evidence of what should have been captured.
-        sessionLog?.logAudioSources(configured: preferences.meetingBundleIDs)
+        sessionLog?.logAudioSources(
+            configured: preferences.meetingBundleIDs,
+            excluded: preferences.excludedBundleIDs
+        )
         stopSourceLogging()
 
+        if let recorder, recorder.writeFailures > 0 {
+            sessionLog?.write("WRITE FAILURES: \(recorder.writeFailures)"
+                              + (recorder.firstWriteError.map { " — \($0)" } ?? ""))
+        }
         if let recorder {
             sessionLog?.write("callbacks: \(recorder.callbackCount), "
                               + "with tap audio: \(recorder.tapNonSilentCallbacks), "
@@ -423,7 +491,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func transcribeFromFiles(directory: URL) async {
-        let transcriber = Transcriber()
+        let transcriber = Transcriber(localeIdentifier: preferences.transcriptionLocaleIdentifier)
 
         do {
             try await transcriber.ensureModelInstalled()
@@ -455,7 +523,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             updateStatusItem()
             // The audio is still on disk, so say where it is rather than
             // letting the recording look lost.
-            showMessage(
+            report(
                 "文字起こしに失敗しました。\n\n\(error.localizedDescription)\n\n"
                     + "録音ファイルは残っています:\n\(directory.path)"
             )
@@ -487,7 +555,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard preferences.warnOnSilentFarSide else { return }
 
         let configured = preferences.meetingBundleIDs.joined(separator: "\n")
-        showMessage(
+        report(
             "相手側の音声が録音されていません（無音）。\n\n"
                 + "会議アプリのバンドルIDが設定に含まれていない可能性があります。"
                 + "設定… →「再生中を検出」を、会議の音が鳴っている状態で押すと追加できます。\n\n"
@@ -512,6 +580,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Actions
+
+    /// The only way to see what the app generated.
+    ///
+    /// Auto-record produces recordings without the user acting, so shipping it
+    /// without a route to the files would mean data appearing on their disk
+    /// with nothing in the UI acknowledging it.
+    @objc private func openRecordingsFolder() {
+        let directory = RecordingStore.defaultBaseDirectory()
+        try? FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        NSWorkspace.shared.open(directory)
+    }
 
     @objc private func openLastTranscript() {
         guard let lastTranscriptURL else { return }
@@ -553,6 +636,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func quit() {
         recorder?.stop()
         NSApp.terminate(nil)
+    }
+
+    /// Reports a problem without blocking.
+    ///
+    /// `runModal()` spins a modal run loop, which stops the detection timer
+    /// from firing. On an unattended machine — exactly what auto-record plus
+    /// launch-at-login creates — one failure would deafen the app until
+    /// somebody clicked OK. Automatic runs therefore only log.
+    private func report(_ text: String) {
+        sessionLog?.write("notice: \(text.replacingOccurrences(of: "\n", with: " "))")
+        guard !currentRunWasAutomatic else {
+            NSLog("[Splitvox] %@", text)
+            return
+        }
+        showMessage(text)
     }
 
     private func showMessage(_ text: String) {

@@ -1,3 +1,4 @@
+import AppKit
 import KeyboardShortcuts
 import SwiftUI
 
@@ -73,7 +74,7 @@ struct SettingsView: View {
             }
 
             Section("除外するアプリ") {
-                Text("ここに書いたアプリは、音を出していても録音の合図になりません。1行に1つ。")
+                Text("ここに書いたアプリは録音の対象から外れ、自動記録の合図にもなりません。1行に1つ。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -81,6 +82,10 @@ struct SettingsView: View {
                     .font(.system(.body, design: .monospaced))
                     .frame(minHeight: 60)
                     .border(Color.secondary.opacity(0.3))
+                    // Saved on change like every other setting here. A control
+                    // whose job is to *prevent* recording must not fail in the
+                    // direction that records more when the window is closed.
+                    .onChange(of: excludedText) { _, _ in saveExclusions() }
 
                 Text(
                     "前方一致で判定するので、notion.id と書けば notion.id.helper も除外されます。"
@@ -90,6 +95,12 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
 
                 Button("再生中のアプリを除外に追加") { excludePlayingApps() }
+
+                if autoRecordEnabled && autoRecordConditions.isEmpty {
+                    Text("条件が1つも有効になっていないため、自動記録は動作しません。")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
             }
 
             Section("マイク") {
@@ -128,13 +139,14 @@ struct SettingsView: View {
                 Toggle("会議を検出したら自動で録音する", isOn: $autoRecordEnabled)
                     .onChange(of: autoRecordEnabled) { _, value in
                         store.autoRecordEnabled = value
+                        if value { acknowledgeAutoRecordOnce() }
                     }
 
                 Text("開始条件（有効にしたものをすべて満たしたとき）")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                ForEach(AutoRecordConditions.all, id: \.rawValue) { condition in
+                ForEach(AutoRecordConditions.orderedOptions, id: \.rawValue) { condition in
                     VStack(alignment: .leading, spacing: 2) {
                         Toggle(condition.label, isOn: binding(for: condition))
                             .disabled(!autoRecordEnabled)
@@ -172,7 +184,7 @@ struct SettingsView: View {
                 .disabled(!autoRecordEnabled)
                 .onChange(of: maximumDuration) { _, _ in saveTiming() }
 
-                Text("音が鳴り続けた場合の暴走防止。1時間あたり約1GBを消費します。")
+                Text("上限に達すると停止し、条件が一度途切れるまで再開しません。1時間あたり約1GBを消費します。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -307,15 +319,41 @@ struct SettingsView: View {
 
         current.append(contentsOf: added)
         excludedText = current.joined(separator: "\n")
-        detectionMessage = "除外に追加: \(added.joined(separator: ", "))（保存が必要です）"
+        detectionMessage = "除外に追加: \(added.joined(separator: ", "))"
+    }
+
+    /// Shown once, the first time auto-record is switched on.
+    private func acknowledgeAutoRecordOnce() {
+        guard !store.autoRecordAcknowledged else { return }
+        store.autoRecordAcknowledged = true
+
+        let alert = NSAlert()
+        alert.messageText = "自動記録を有効にしました"
+        alert.informativeText = """
+            条件を満たすと、操作しなくても録音が始まります。
+
+            ・会議相手の音声も録音されます
+            ・相手に通知は行われません
+            ・録音の可否と告知は、あなたの責任で判断してください
+
+            録音されたものは、メニューバーの「録音フォルダを開く」から\
+            いつでも確認・削除できます。
+            """
+        alert.alertStyle = .informational
+        alert.runModal()
+    }
+
+    private func saveExclusions() {
+        store.excludedBundleIDs = excludedText
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
     private func saveTiming() {
         store.autoRecordTiming = AutoRecordTiming(
             startAfter: startAfter,
             stopAfter: stopAfter,
-            maximumDuration: maximumDuration,
-            playbackThresholdDecibels: AutoRecordTiming.default.playbackThresholdDecibels
+            maximumDuration: maximumDuration
         )
     }
 
@@ -366,7 +404,7 @@ struct SettingsView: View {
     /// the only reliable way to get them, so it is offered directly here.
     private func detectPlayingApps() {
         let playing = Set(AudioProcessLookup.bundleIDsProducingOutput())
-            .subtracting(["com.ryo.splitvox"])
+            .subtracting([Config.bundleIdentifier])
             .sorted()
 
         guard !playing.isEmpty else {
@@ -384,10 +422,6 @@ struct SettingsView: View {
             .map { $0.trimmingCharacters(in: .whitespaces) }
 
         store.inputDeviceUID = selectedInputUID == Self.systemDefaultTag ? nil : selectedInputUID
-
-        store.excludedBundleIDs = excludedText
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
 
         // Re-read so the field shows what was actually kept, including the
         // fallback to defaults when the list was emptied.

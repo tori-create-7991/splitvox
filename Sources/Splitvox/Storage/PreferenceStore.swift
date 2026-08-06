@@ -8,7 +8,6 @@ struct Preferences: Equatable {
     let meetingBundleIDs: [String]
     let inputDeviceUID: String?
     let autoRecordEnabled: Bool
-    let autoRecordConditions: AutoRecordConditions
 }
 
 /// User-changeable settings. `Config` holds the values fixed at build time.
@@ -28,6 +27,7 @@ struct PreferenceStore {
         static let maximumDuration = "autoRecordMaximumDuration"
         static let transcriptionLocale = "transcriptionLocale"
         static let warnOnSilentFarSide = "warnOnSilentFarSide"
+        static let autoRecordAcknowledged = "autoRecordAcknowledged"
         static let excludedBundleIDs = "excludedBundleIDs"
     }
 
@@ -98,15 +98,22 @@ struct PreferenceStore {
     var autoRecordTiming: AutoRecordTiming {
         get {
             var timing = AutoRecordTiming.default
-            if defaults.object(forKey: Key.startAfter) != nil {
-                timing.startAfter = defaults.double(forKey: Key.startAfter)
-            }
-            if defaults.object(forKey: Key.stopAfter) != nil {
-                timing.stopAfter = defaults.double(forKey: Key.stopAfter)
-            }
-            if defaults.object(forKey: Key.maximumDuration) != nil {
-                timing.maximumDuration = defaults.double(forKey: Key.maximumDuration)
-            }
+            // Clamped to the offered choices. A stored 0 for maximumDuration —
+            // reachable via `defaults write` or a future migration — would make
+            // the cap fire on the first tick after every start, producing a
+            // stream of 3-second sessions.
+            timing.startAfter = Self.clamped(
+                defaults, Key.startAfter,
+                to: AutoRecordTiming.startChoices, default: timing.startAfter
+            )
+            timing.stopAfter = Self.clamped(
+                defaults, Key.stopAfter,
+                to: AutoRecordTiming.stopChoices, default: timing.stopAfter
+            )
+            timing.maximumDuration = Self.clamped(
+                defaults, Key.maximumDuration,
+                to: AutoRecordTiming.maximumChoices, default: timing.maximumDuration
+            )
             return timing
         }
         nonmutating set {
@@ -122,9 +129,7 @@ struct PreferenceStore {
         get {
             let stored = defaults.string(forKey: Key.transcriptionLocale)?
                 .trimmingCharacters(in: .whitespaces)
-            return (stored?.isEmpty ?? true)
-                ? Config.transcriptionLocaleIdentifier
-                : stored!
+            return Self.validLocale(stored) ?? Config.transcriptionLocaleIdentifier
         }
         nonmutating set { defaults.set(newValue, forKey: Key.transcriptionLocale) }
     }
@@ -154,13 +159,44 @@ struct PreferenceStore {
         nonmutating set { defaults.set(Self.clean(newValue), forKey: Key.excludedBundleIDs) }
     }
 
+    /// Locale must be one this build actually offers, so the Settings picker
+    /// always has a matching tag and cannot render blank.
+    private static func validLocale(_ identifier: String?) -> String? {
+        guard let identifier, !identifier.isEmpty else { return nil }
+        return Config.transcriptionLocales.contains { $0.identifier == identifier }
+            ? identifier
+            : nil
+    }
+
+    /// Whether the user has seen the one-time notice about unattended
+    /// recording. Enabling auto-record is the moment they take on
+    /// responsibility for recording other people; it should not pass silently.
+    var autoRecordAcknowledged: Bool {
+        get { defaults.bool(forKey: Key.autoRecordAcknowledged) }
+        nonmutating set { defaults.set(newValue, forKey: Key.autoRecordAcknowledged) }
+    }
+
     var current: Preferences {
         Preferences(
             meetingBundleIDs: meetingBundleIDs,
             inputDeviceUID: inputDeviceUID,
-            autoRecordEnabled: autoRecordEnabled,
-            autoRecordConditions: autoRecordConditions
+            autoRecordEnabled: autoRecordEnabled
         )
+    }
+
+    /// Reads a stored interval, falling back to `default` when absent or
+    /// outside the offered range.
+    private static func clamped(
+        _ defaults: UserDefaults,
+        _ key: String,
+        to choices: [TimeInterval],
+        default fallback: TimeInterval
+    ) -> TimeInterval {
+        guard defaults.object(forKey: key) != nil else { return fallback }
+        let stored = defaults.double(forKey: key)
+        guard let lowest = choices.min(), let highest = choices.max(),
+              stored >= lowest, stored <= highest else { return fallback }
+        return stored
     }
 
     private static func clean(_ values: [String]) -> [String] {

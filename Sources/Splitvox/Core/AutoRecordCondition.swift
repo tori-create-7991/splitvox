@@ -3,12 +3,17 @@ import Foundation
 /// Conditions that must all hold before a recording starts on its own.
 ///
 /// A set rather than a single choice, because the right rule depends on how
-/// someone works and the signals are independent. Checking more of them makes
-/// the trigger stricter: every enabled condition has to be true.
+/// someone works. Checking more of them makes the trigger stricter: every
+/// enabled condition has to be true.
+///
+/// The options are not fully orthogonal. `physicalInput` already implies
+/// `externalInput` — `isPhysicalExternalInputActive()` performs the same
+/// built-in-microphone check and then adds a transport-type test — so enabling
+/// both is equivalent to enabling `physicalInput` alone.
 ///
 /// Enabling none disables the trigger entirely rather than matching everything.
 /// A condition set that fires unconditionally would record all day.
-struct AutoRecordConditions: OptionSet, Codable, Sendable {
+struct AutoRecordConditions: OptionSet, Sendable {
     let rawValue: Int
 
     init(rawValue: Int) { self.rawValue = rawValue }
@@ -26,7 +31,12 @@ struct AutoRecordConditions: OptionSet, Codable, Sendable {
     /// silence.
     static let `default`: AutoRecordConditions = [.playback, .externalInput]
 
-    static let all: [AutoRecordConditions] = [
+    /// The individual options in display order.
+    ///
+    /// Not named `all`: on an OptionSet that conventionally means the union
+    /// value, and `conditions == .all` would compile while meaning something
+    /// else entirely.
+    static let orderedOptions: [AutoRecordConditions] = [
         .playback, .externalInput, .physicalInput, .microphoneInUse
     ]
 

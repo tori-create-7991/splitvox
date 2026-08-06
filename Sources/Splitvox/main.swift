@@ -3,10 +3,13 @@ import AppKit
 // Diagnostics run headless and exit; they must not start the menu bar app.
 if let index = CommandLine.arguments.firstIndex(of: "--probe-detect") {
     let seconds = CommandLine.arguments.dropFirst(index + 1).first.flatMap(Double.init) ?? 60
+    let preferences = PreferenceStore()
     ProbeCommand.probeDetect(
-        bundleIDs: PreferenceStore().meetingBundleIDs,
+        bundleIDs: preferences.meetingBundleIDs,
         seconds: seconds,
-        conditions: PreferenceStore().autoRecordConditions
+        conditions: preferences.autoRecordConditions,
+        excludedBundleIDs: preferences.excludedBundleIDs,
+        timing: preferences.autoRecordTiming
     )
     exit(0)
 }

@@ -19,8 +19,16 @@ struct MeetingTrigger {
 
     let startAfter: TimeInterval
     let stopAfter: TimeInterval
-    /// Upper bound on one recording, as a runaway guard. An application left
-    /// playing would otherwise record until the disk fills.
+    /// Upper bound on one recording.
+    ///
+    /// A real guard, not file rotation: after the cap fires, the trigger will
+    /// not start again until the conditions have actually lapsed once. Without
+    /// that latch an application left playing simply restarts the countdown and
+    /// fills the disk in 4-hour instalments, which is what the cap exists to
+    /// prevent.
+    ///
+    /// Measured against `systemUptime`, which does not advance while the Mac
+    /// sleeps — so this bounds awake time, not wall time.
     let maximumDuration: TimeInterval
 
     private var isRecording = false
@@ -29,6 +37,8 @@ struct MeetingTrigger {
     private var detectedSince: TimeInterval?
     private var absentSince: TimeInterval?
     private var recordingSince: TimeInterval?
+    /// Set when the cap fires. Blocks restarting until conditions go false.
+    private var awaitingConditionsToLapse = false
 
     init(
         startAfter: TimeInterval = 5,
@@ -56,6 +66,7 @@ struct MeetingTrigger {
             recordingSince = nil
             detectedSince = nil
             absentSince = now
+            awaitingConditionsToLapse = true
             return .stop
         }
 
@@ -64,6 +75,7 @@ struct MeetingTrigger {
             let since = detectedSince ?? now
             detectedSince = since
 
+            guard !awaitingConditionsToLapse else { return .none }
             guard !isRecording, now - since >= startAfter else { return .none }
             isRecording = true
             recordingSince = now
@@ -71,6 +83,8 @@ struct MeetingTrigger {
         }
 
         detectedSince = nil
+        // Conditions have lapsed, so a cap-triggered block is lifted.
+        awaitingConditionsToLapse = false
         let since = absentSince ?? now
         absentSince = since
 
@@ -78,6 +92,22 @@ struct MeetingTrigger {
         isRecording = false
         recordingSince = nil
         return .stop
+    }
+
+    /// Replace the thresholds without losing the run state.
+    ///
+    /// Assigning a whole new trigger would discard `isRecording` and
+    /// `recordingSince`, so closing the settings window mid-recording would
+    /// restart the cap clock — or, with auto-record switched off, leave the
+    /// running recording with no cap at all.
+    func adopting(timing: AutoRecordTiming) -> MeetingTrigger {
+        var updated = MeetingTrigger(timing: timing)
+        updated.isRecording = isRecording
+        updated.recordingSince = recordingSince
+        updated.detectedSince = detectedSince
+        updated.absentSince = absentSince
+        updated.awaitingConditionsToLapse = awaitingConditionsToLapse
+        return updated
     }
 
     /// Adopt a recording that something else began — the menu, or the hotkey —
@@ -95,4 +125,7 @@ struct MeetingTrigger {
         detectedSince = nil
         absentSince = now
     }
+
+    /// Exposed for tests and for `adopting(timing:)`.
+    var isCurrentlyRecording: Bool { isRecording }
 }
