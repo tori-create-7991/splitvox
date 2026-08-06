@@ -116,6 +116,36 @@ struct PreferenceStoreTests {
         #expect(loaded.startAfter == AutoRecordTiming.default.startAfter)
     }
 
+    /// 下限だけ守っても意味がない。上限を超えた値も同じ経路で入ってくる。
+    @Test("上限を超えた時間設定も既定に落ちる")
+    func aboveMaximumTimingFallsBackToDefault() {
+        let (store, defaults) = makeStore()
+
+        defaults.set(999_999_999.0, forKey: "autoRecordMaximumDuration")
+
+        #expect(store.autoRecordTiming.maximumDuration == AutoRecordTiming.default.maximumDuration)
+    }
+
+    /// 範囲内でも選択肢に無い値は Picker のタグと一致せず、設定画面が空欄になる。
+    @Test("選択肢に無い時間設定は既定に落ちる")
+    func unofferedTimingFallsBackToDefault() {
+        let (store, defaults) = makeStore()
+
+        defaults.set(7.0, forKey: "autoRecordStartAfter")
+
+        #expect(store.autoRecordTiming.startAfter == AutoRecordTiming.default.startAfter)
+    }
+
+    /// 新しい版が5つ目の条件を書き込んだ後にダウングレードした場合。
+    @Test("未知のビットは読み込み時に落とされる")
+    func unknownConditionBitsAreDropped() {
+        let (store, defaults) = makeStore()
+
+        defaults.set(AutoRecordConditions.default.rawValue | (1 << 4), forKey: "autoRecordCondition")
+
+        #expect(store.autoRecordConditions == .default)
+    }
+
     /// 提示していない言語が入ると Picker に一致するタグが無くなり空欄になる。
     @Test("提示外の言語は既定に落ちる")
     func unofferedLocaleFallsBackToDefault() {

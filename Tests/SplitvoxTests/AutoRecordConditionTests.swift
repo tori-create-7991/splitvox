@@ -121,6 +121,27 @@ struct AutoRecordConditionTests {
         }
     }
 
+    /// 新しい版が5つ目の条件を書き込んだ後にダウングレードすると起きる。
+    /// 未知ビットだけの集合は isEmpty を通過し、どの contains にも一致せず、
+    /// 最後の return true に落ちて「全条件 false でも録音開始」になっていた。
+    @Test("未知のビットだけの設定では開始しない")
+    func unknownBitsNeverStart() {
+        let nothingHolds = sample()
+        let unknownOnly = AutoRecordConditions(rawValue: 1 << 4)
+
+        #expect(unknownOnly.isEmpty == false)
+        #expect(nothingHolds.shouldRecord(matching: unknownOnly) == false)
+    }
+
+    @Test("未知のビットは既知の条件の判定を変えない")
+    func unknownBitsDoNotRelaxKnownConditions() {
+        let headsetOnly = sample(headset: true, playing: audio)
+        let withUnknown = AutoRecordConditions(rawValue: AutoRecordConditions.default.rawValue | (1 << 4))
+
+        #expect(headsetOnly.shouldRecord(matching: withUnknown))
+        #expect(sample(headset: true).shouldRecord(matching: withUnknown) == false)
+    }
+
     @Test("すべての条件を有効にすると最も厳しくなる")
     func allConditionsIsStrictest() {
         let everything = AutoRecordConditions(AutoRecordConditions.orderedOptions)

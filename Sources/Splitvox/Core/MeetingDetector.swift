@@ -20,13 +20,16 @@ enum MeetingDetector {
         ///
         /// An empty set means the trigger is off, not that everything matches —
         /// a set with no constraints would start recording and never stop.
+        /// Unknown bits are discarded first, so a set that this build cannot
+        /// interpret is treated as off rather than as unconditional.
         func shouldRecord(matching conditions: AutoRecordConditions) -> Bool {
-            guard !conditions.isEmpty else { return false }
+            let enabled = conditions.intersection(.known)
+            guard !enabled.isEmpty else { return false }
 
-            if conditions.contains(.playback) && playing.isEmpty { return false }
-            if conditions.contains(.externalInput) && !headsetActive { return false }
-            if conditions.contains(.physicalInput) && !physicalHeadsetActive { return false }
-            if conditions.contains(.microphoneInUse) && !microphoneInUse { return false }
+            if enabled.contains(.playback) && playing.isEmpty { return false }
+            if enabled.contains(.externalInput) && !headsetActive { return false }
+            if enabled.contains(.physicalInput) && !physicalHeadsetActive { return false }
+            if enabled.contains(.microphoneInUse) && !microphoneInUse { return false }
 
             return true
         }
@@ -81,16 +84,35 @@ enum MeetingDetector {
         // Splitvox holds the microphone while recording, so counting itself
         // would make the microphone condition self-sustaining and the recording
         // would never stop.
-        let capturing = AudioProcessLookup.bundleIDsConsumingInput(
-            excluding: [Config.bundleIdentifier]
-        )
-
-        return Sample(
+        return sample(
+            meetingBundleIDs: meetingBundleIDs,
+            excludedBundleIDs: excludedBundleIDs,
+            producing: AudioProcessLookup.bundleIDsProducingOutput(),
+            capturing: AudioProcessLookup.bundleIDsConsumingInput(
+                excluding: [Config.bundleIdentifier]
+            ),
             headsetActive: AudioDeviceLookup.isExternalInputActive(),
-            physicalHeadsetActive: AudioDeviceLookup.isPhysicalExternalInputActive(),
+            physicalHeadsetActive: AudioDeviceLookup.isPhysicalExternalInputActive()
+        )
+    }
+
+    /// The wiring, with the Core Audio lookups supplied. Split out so a test can
+    /// assert that the exclusion list actually reaches both fields — the filters
+    /// themselves were covered while the call sites feeding them were not.
+    static func sample(
+        meetingBundleIDs: [String],
+        excludedBundleIDs: [String],
+        producing: [String],
+        capturing: [String],
+        headsetActive: Bool,
+        physicalHeadsetActive: Bool
+    ) -> Sample {
+        Sample(
+            headsetActive: headsetActive,
+            physicalHeadsetActive: physicalHeadsetActive,
             microphoneInUse: !filterCapturing(capturing, excluded: excludedBundleIDs).isEmpty,
             playing: filterPlaying(
-                producing: AudioProcessLookup.bundleIDsProducingOutput(),
+                producing: producing,
                 configured: meetingBundleIDs,
                 excluded: excludedBundleIDs
             )

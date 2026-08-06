@@ -95,12 +95,6 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
 
                 Button("再生中のアプリを除外に追加") { excludePlayingApps() }
-
-                if autoRecordEnabled && autoRecordConditions.isEmpty {
-                    Text("条件が1つも有効になっていないため、自動記録は動作しません。")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
             }
 
             Section("マイク") {

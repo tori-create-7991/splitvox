@@ -100,6 +100,34 @@ struct MeetingTriggerMaximumTests {
         #expect(updated.observe(meetingDetected: true, at: 105) == .stop)
     }
 
+    /// 上限で止めた直後に設定を保存すればラッチが消えて再開できてしまう、
+    /// という抜け道を塞ぐ。
+    @Test("差し替えても上限のラッチは持ち越される")
+    func adoptingPreservesCapLatch() {
+        var trigger = MeetingTrigger(startAfter: 5, stopAfter: 30, maximumDuration: 100)
+        _ = trigger.observe(meetingDetected: true, at: 0)
+        _ = trigger.observe(meetingDetected: true, at: 5)
+        _ = trigger.observe(meetingDetected: true, at: 105)
+
+        var updated = trigger.adopting(
+            timing: AutoRecordTiming(startAfter: 5, stopAfter: 30, maximumDuration: 100)
+        )
+
+        #expect(updated.observe(meetingDetected: true, at: 110) == .none)
+        #expect(updated.observe(meetingDetected: true, at: 200) == .none)
+    }
+
+    /// 手動・ホットキーで始めた録音にも上限を効かせるための引き継ぎ。
+    /// recordingSince を落とすと、以後どの録音も上限で止まらなくなる。
+    @Test("外部から始まった録音にも上限が効く")
+    func adoptedRecordingIsStillCapped() {
+        var trigger = MeetingTrigger(startAfter: 5, stopAfter: 30, maximumDuration: 100)
+        trigger.recordingBecameActive(at: 0)
+
+        #expect(trigger.observe(meetingDetected: true, at: 50) == .none)
+        #expect(trigger.observe(meetingDetected: true, at: 105) == .stop)
+    }
+
     @Test("差し替え後は新しい閾値が使われる")
     func adoptingTimingAppliesNewThresholds() {
         var trigger = MeetingTrigger(startAfter: 5, stopAfter: 30, maximumDuration: 100)

@@ -98,8 +98,14 @@ struct MeetingTrigger {
     ///
     /// Assigning a whole new trigger would discard `isRecording` and
     /// `recordingSince`, so closing the settings window mid-recording would
-    /// restart the cap clock — or, with auto-record switched off, leave the
-    /// running recording with no cap at all.
+    /// restart the cap clock and the recording would run for another full cap.
+    /// The cap latch carries over too, so a settings save cannot be used —
+    /// deliberately or otherwise — to restart a run the cap just stopped.
+    ///
+    /// Known limitation: this preserves state, it does not keep the cap running.
+    /// Switching auto-record *off* invalidates the detection timer, so `observe`
+    /// stops being called and an in-flight recording continues uncapped until it
+    /// is stopped by hand.
     func adopting(timing: AutoRecordTiming) -> MeetingTrigger {
         var updated = MeetingTrigger(timing: timing)
         updated.isRecording = isRecording

@@ -23,8 +23,9 @@ struct AutoRecordTiming: Equatable {
     ///
     /// Without it, an application left playing audio can record until the disk
     /// fills — roughly a gigabyte an hour. `MeetingTrigger` holds the trigger
-    /// closed after the cap fires until the conditions lapse, so this really
-    /// does bound usage rather than splitting it into instalments.
+    /// closed after the cap fires until the conditions lapse once, so a run
+    /// that never pauses cannot continue past the cap. It bounds a continuous
+    /// run, not a day's total: a single non-matching sample re-arms it.
     ///
     /// Measured against `systemUptime`, so it bounds awake time, not wall time.
     var maximumDuration: TimeInterval

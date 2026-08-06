@@ -134,4 +134,36 @@ struct ExcludedBundleIDTests {
         // 自分を数えると .microphoneInUse が自己保持し、録音が止まらなくなる。
         #expect(result.isEmpty)
     }
+
+    /// フィルタ自体は covered だったが、除外リストを両方のフィールドへ渡す
+    /// 配線は covered ではなかった。片方の excluded を落としても緑のままだった。
+    @Test("除外リストは再生とマイクの両方に届く")
+    func exclusionsReachBothSignals() {
+        let sample = MeetingDetector.sample(
+            meetingBundleIDs: ["us.zoom.xos"],
+            excludedBundleIDs: ["us.zoom.xos"],
+            producing: ["us.zoom.xos"],
+            capturing: ["us.zoom.xos"],
+            headsetActive: true,
+            physicalHeadsetActive: true
+        )
+
+        #expect(sample.playing.isEmpty)
+        #expect(sample.microphoneInUse == false)
+    }
+
+    @Test("除外されていない音源は両方に残る")
+    func unexcludedSourcesSurviveBothSignals() {
+        let sample = MeetingDetector.sample(
+            meetingBundleIDs: ["us.zoom.xos"],
+            excludedBundleIDs: ["com.apple.Music"],
+            producing: ["us.zoom.xos"],
+            capturing: ["us.zoom.xos"],
+            headsetActive: true,
+            physicalHeadsetActive: true
+        )
+
+        #expect(sample.playing == ["us.zoom.xos"])
+        #expect(sample.microphoneInUse)
+    }
 }

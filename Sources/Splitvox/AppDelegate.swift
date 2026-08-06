@@ -87,8 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             break
         case .start:
             guard session.state == .idle else { return }
-            currentRunWasAutomatic = true
-            startRecording()
+            beginRun(automatically: true)
         case .stop:
             guard session.state == .recording else { return }
             stopRecording()
@@ -100,8 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func toggleRecording() {
         switch session.state {
         case .idle:
-            currentRunWasAutomatic = false
-            startRecording()
+            beginRun(automatically: false)
         case .recording:
             stopRecording()
         case .transcribing:
@@ -243,7 +241,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Recording
 
+    /// Menu items target this selector directly, so the flag is cleared here
+    /// rather than in `toggleRecording` — otherwise a menu-started run would
+    /// inherit `true` from the previous automatic one and silently swallow its
+    /// error dialogs.
     @objc private func startRecording() {
+        beginRun(automatically: false)
+    }
+
+    private func beginRun(automatically: Bool) {
+        currentRunWasAutomatic = automatically
         Task { await beginRecording() }
     }
 
@@ -252,6 +259,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard await requestMicrophoneAccess() else {
             session.fail("マイクへのアクセスが許可されていません")
+            // Without this the trigger still believes a recording is running
+            // and would never start the next meeting.
+            trigger.recordingBecameInactive(at: uptime)
             updateStatusItem()
             report(
                 "マイクへのアクセスが許可されていません。\n\n"
@@ -323,6 +333,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             tearDownLiveTranscription()
             session.fail(error.localizedDescription)
+            trigger.recordingBecameInactive(at: uptime)
             report("録音を開始できませんでした。\n\n\(error.localizedDescription)")
         }
 
@@ -362,12 +373,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Sample audio sources periodically for the whole recording.
-    ///
-    /// A single check at the start is not enough: an application can begin
-    /// playing minutes in — Zoom starts its meeting host process when the call
-    /// connects, not when the app launches.
-    /// Refuses to start when the volume cannot hold the maximum session.
+    /// Refuses to start when the volume cannot hold the session.
     ///
     /// Without this the WAVs simply truncate as the disk fills: writes fail
     /// silently, live transcription keeps producing text, and the session ends
@@ -380,8 +386,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return nil
         }
 
-        // Roughly 1 GB per hour across both tracks, plus a margin.
-        let hours = preferences.autoRecordTiming.maximumDuration / 3600
+        // Roughly 1 GB per hour across both tracks, plus a margin. Only an
+        // automatic run is sized against the cap: a deliberate 10-minute
+        // recording should not be refused because the cap happens to be 8 hours.
+        let hours = currentRunWasAutomatic
+            ? preferences.autoRecordTiming.maximumDuration / 3600
+            : 1
         let required = Int64((hours + 1) * 1_000_000_000)
         guard available < required else { return nil }
 
@@ -395,6 +405,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
+    /// Sample audio sources periodically for the whole recording.
+    ///
+    /// A single check at the start is not enough: an application can begin
+    /// playing minutes in — Zoom starts its meeting host process when the call
+    /// connects, not when the app launches.
     private func startSourceLogging(configured: [String], excluded: [String]) {
         sourceLogTimer?.invalidate()
         sourceLogTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in

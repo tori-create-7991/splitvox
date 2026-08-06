@@ -88,7 +88,13 @@ struct PreferenceStore {
             guard defaults.object(forKey: Key.autoRecordCondition) != nil else {
                 return .default
             }
-            return AutoRecordConditions(rawValue: defaults.integer(forKey: Key.autoRecordCondition))
+            let stored = AutoRecordConditions(
+                rawValue: defaults.integer(forKey: Key.autoRecordCondition)
+            )
+            // Drop bits a newer version wrote. Kept here as well as in
+            // `shouldRecord` so the Settings toggles show what is actually in
+            // force rather than an option this build cannot render.
+            return stored.intersection(.known)
         }
         nonmutating set { defaults.set(newValue.rawValue, forKey: Key.autoRecordCondition) }
     }
@@ -102,15 +108,15 @@ struct PreferenceStore {
             // reachable via `defaults write` or a future migration — would make
             // the cap fire on the first tick after every start, producing a
             // stream of 3-second sessions.
-            timing.startAfter = Self.clamped(
+            timing.startAfter = Self.offered(
                 defaults, Key.startAfter,
                 to: AutoRecordTiming.startChoices, default: timing.startAfter
             )
-            timing.stopAfter = Self.clamped(
+            timing.stopAfter = Self.offered(
                 defaults, Key.stopAfter,
                 to: AutoRecordTiming.stopChoices, default: timing.stopAfter
             )
-            timing.maximumDuration = Self.clamped(
+            timing.maximumDuration = Self.offered(
                 defaults, Key.maximumDuration,
                 to: AutoRecordTiming.maximumChoices, default: timing.maximumDuration
             )
@@ -184,9 +190,13 @@ struct PreferenceStore {
         )
     }
 
-    /// Reads a stored interval, falling back to `default` when absent or
-    /// outside the offered range.
-    private static func clamped(
+    /// Reads a stored interval, falling back to `default` unless it is one of
+    /// the offered choices.
+    ///
+    /// Membership, not a range check: the Settings `Picker` tags each choice, so
+    /// an in-range value that is not offered leaves the control blank. Same
+    /// treatment as `validLocale`.
+    private static func offered(
         _ defaults: UserDefaults,
         _ key: String,
         to choices: [TimeInterval],
@@ -194,8 +204,7 @@ struct PreferenceStore {
     ) -> TimeInterval {
         guard defaults.object(forKey: key) != nil else { return fallback }
         let stored = defaults.double(forKey: key)
-        guard let lowest = choices.min(), let highest = choices.max(),
-              stored >= lowest, stored <= highest else { return fallback }
+        guard choices.contains(stored) else { return fallback }
         return stored
     }
 

@@ -31,6 +31,17 @@ struct AutoRecordConditions: OptionSet, Sendable {
     /// silence.
     static let `default`: AutoRecordConditions = [.playback, .externalInput]
 
+    /// Every bit this version understands.
+    ///
+    /// A stored value can carry bits this build does not know — a newer release
+    /// adds a fifth option and the user downgrades. Unknown bits must be
+    /// dropped, not carried: a set holding only unknown bits is non-empty yet
+    /// matches no check, which would reach the unconditional branch and record
+    /// with every condition false.
+    static let known: AutoRecordConditions = [
+        .playback, .externalInput, .physicalInput, .microphoneInUse
+    ]
+
     /// The individual options in display order.
     ///
     /// Not named `all`: on an OptionSet that conventionally means the union
