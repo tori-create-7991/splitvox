@@ -142,8 +142,8 @@ struct ExcludedBundleIDTests {
         let sample = MeetingDetector.sample(
             meetingBundleIDs: ["us.zoom.xos"],
             excludedBundleIDs: ["us.zoom.xos"],
-            producing: ["us.zoom.xos"],
-            capturing: ["us.zoom.xos"],
+            producing: OutputProducers(bundleIDs: ["us.zoom.xos"]),
+            capturing: InputConsumers(bundleIDs: ["us.zoom.xos"]),
             headsetActive: true,
             physicalHeadsetActive: true
         )
@@ -157,8 +157,8 @@ struct ExcludedBundleIDTests {
         let sample = MeetingDetector.sample(
             meetingBundleIDs: ["us.zoom.xos"],
             excludedBundleIDs: ["com.apple.Music"],
-            producing: ["us.zoom.xos"],
-            capturing: ["us.zoom.xos"],
+            producing: OutputProducers(bundleIDs: ["us.zoom.xos"]),
+            capturing: InputConsumers(bundleIDs: ["us.zoom.xos"]),
             headsetActive: true,
             physicalHeadsetActive: true
         )

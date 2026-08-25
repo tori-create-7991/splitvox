@@ -1,6 +1,14 @@
 import CoreAudio
 import Foundation
 
+struct OutputProducers {
+    let bundleIDs: [String]
+}
+
+struct InputConsumers {
+    let bundleIDs: [String]
+}
+
 /// Resolves Core Audio process objects, which is how a tap names the
 /// applications it captures.
 ///
@@ -65,10 +73,12 @@ enum AudioProcessLookup {
 
     /// Bundle IDs currently producing output, for diagnostics and for telling
     /// the user which application to add when a recording captured silence.
-    static func bundleIDsProducingOutput() -> [String] {
-        allProcessObjectIDs()
-            .filter(isProducingOutput)
-            .compactMap(bundleID(of:))
+    static func bundleIDsProducingOutput() -> OutputProducers {
+        OutputProducers(
+            bundleIDs: allProcessObjectIDs()
+                .filter(isProducingOutput)
+                .compactMap(bundleID(of:))
+        )
     }
 
     static func isConsumingInput(_ object: AudioObjectID) -> Bool {
@@ -85,10 +95,12 @@ enum AudioProcessLookup {
     ///
     /// This is what separates a meeting from watching a video: both play audio,
     /// but only a call also holds the microphone open.
-    static func bundleIDsConsumingInput(excluding excluded: Set<String> = []) -> [String] {
-        allProcessObjectIDs()
-            .filter(isConsumingInput)
-            .compactMap(bundleID(of:))
-            .filter { !excluded.contains($0) }
+    static func bundleIDsConsumingInput(excluding excluded: Set<String> = []) -> InputConsumers {
+        InputConsumers(
+            bundleIDs: allProcessObjectIDs()
+                .filter(isConsumingInput)
+                .compactMap(bundleID(of:))
+                .filter { !excluded.contains($0) }
+        )
     }
 }
