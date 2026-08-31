@@ -8,7 +8,7 @@ struct AudioInputDevice: Equatable {
     let inputChannelCount: Int
 }
 
-struct HeadsetState {
+struct HeadsetState: Equatable {
     let external: Bool
     let physical: Bool
 }
@@ -108,12 +108,19 @@ enum AudioDeviceLookup {
     /// microphone use it does not depend on which application is running.
     /// Virtual devices count as external but not physical.
     static func headsetState() -> HeadsetState {
-        guard let device = defaultInputDeviceID(), let uid = uid(of: device), uid != builtInMicrophoneUID else {
+        guard let device = defaultInputDeviceID() else {
             return HeadsetState(external: false, physical: false)
         }
 
-        guard let transport = transportType(of: device) else {
-            return HeadsetState(external: true, physical: false)
+        return headsetState(uid: uid(of: device), transport: transportType(of: device))
+    }
+
+    /// Classifies a default input without performing Core Audio queries.
+    /// Keeping the lookup boundary here lets tests cover the complete device
+    /// partition while the production path passes the resulting value intact.
+    static func headsetState(uid: String?, transport: UInt32?) -> HeadsetState {
+        guard let uid, uid != builtInMicrophoneUID else {
+            return HeadsetState(external: false, physical: false)
         }
 
         let physical: Bool

@@ -144,8 +144,7 @@ struct ExcludedBundleIDTests {
             excludedBundleIDs: ["us.zoom.xos"],
             producing: OutputProducers(bundleIDs: ["us.zoom.xos"]),
             capturing: InputConsumers(bundleIDs: ["us.zoom.xos"]),
-            headsetActive: true,
-            physicalHeadsetActive: true
+            headset: HeadsetState(external: true, physical: true)
         )
 
         #expect(sample.playing.isEmpty)
@@ -159,8 +158,7 @@ struct ExcludedBundleIDTests {
             excludedBundleIDs: ["com.apple.Music"],
             producing: OutputProducers(bundleIDs: ["us.zoom.xos"]),
             capturing: InputConsumers(bundleIDs: ["us.zoom.xos"]),
-            headsetActive: true,
-            physicalHeadsetActive: true
+            headset: HeadsetState(external: true, physical: true)
         )
 
         #expect(sample.playing == ["us.zoom.xos"])

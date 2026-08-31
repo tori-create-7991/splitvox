@@ -84,7 +84,6 @@ enum MeetingDetector {
         // Splitvox holds the microphone while recording, so counting itself
         // would make the microphone condition self-sustaining and the recording
         // would never stop.
-        let headset = AudioDeviceLookup.headsetState()
         return sample(
             meetingBundleIDs: meetingBundleIDs,
             excludedBundleIDs: excludedBundleIDs,
@@ -92,8 +91,7 @@ enum MeetingDetector {
             capturing: AudioProcessLookup.bundleIDsConsumingInput(
                 excluding: [Config.bundleIdentifier]
             ),
-            headsetActive: headset.external,
-            physicalHeadsetActive: headset.physical
+            headset: AudioDeviceLookup.headsetState()
         )
     }
 
@@ -105,12 +103,11 @@ enum MeetingDetector {
         excludedBundleIDs: [String],
         producing: OutputProducers,
         capturing: InputConsumers,
-        headsetActive: Bool,
-        physicalHeadsetActive: Bool
+        headset: HeadsetState
     ) -> Sample {
         Sample(
-            headsetActive: headsetActive,
-            physicalHeadsetActive: physicalHeadsetActive,
+            headsetActive: headset.external,
+            physicalHeadsetActive: headset.physical,
             microphoneInUse: !filterCapturing(capturing.bundleIDs, excluded: excludedBundleIDs).isEmpty,
             playing: filterPlaying(
                 producing: producing.bundleIDs,
