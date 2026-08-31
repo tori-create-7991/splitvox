@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var recorder: AggregateRecorder?
     private var sessionDirectory: URL?
     private var lastTranscriptURL: URL?
+    private var recordingStartedAt: Date?
 
     private var liveMicrophone: LiveTranscriber?
     private var liveSystemAudio: LiveTranscriber?
@@ -282,7 +283,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         do {
-            let directory = try store.createSessionDirectory(startedAt: Date())
+            let startedAt = Date()
+            let directory = try store.createSessionDirectory(startedAt: startedAt)
             // Exclusions apply to capture, not only to the trigger. A section
             // titled 除外するアプリ that still records the app would be lying.
             let capturedBundleIDs = settings.meetingBundleIDs.filter {
@@ -326,10 +328,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             recorder = newRecorder
             _ = session.start()
+            recordingStartedAt = startedAt
             // Tell the trigger, so a manual start is not followed by an
             // automatic one, and so the stop countdown is measured from here.
             trigger.recordingBecameActive(at: uptime)
             startSourceLogging(configured: capturedBundleIDs, excluded: preferences.excludedBundleIDs)
+            fireRecordingHook(.started, directory: directory, startedAt: startedAt)
         } catch {
             tearDownLiveTranscription()
             session.fail(error.localizedDescription)
@@ -471,6 +475,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await finishSession(directory: directory) }
     }
 
+    private func fireRecordingHook(
+        _ event: RecordingHookEvent,
+        directory: URL,
+        startedAt: Date
+    ) {
+        let hook = preferences.recordingHook(for: event)
+        guard !hook.isEmpty else { return }
+
+        sessionLog?.write("dispatching \(event.rawValue) hook")
+        RecordingHookRunner.fire(
+            hook,
+            context: RecordingHookContext(
+                event: event,
+                sessionDirectory: directory,
+                occurredAt: Date(),
+                startedAt: startedAt
+            )
+        )
+    }
+
     private func finishSession(directory: URL) async {
         // Drain whatever the live transcribers still hold before deciding
         // whether the transcript is usable.
@@ -487,6 +511,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
                 warnIfFarSideSilent(directory: directory)
                 sessionLog?.write("done — \(accumulator.me.count + accumulator.them.count) segments")
+                fireRecordingFinishedHook(directory: directory)
                 sessionLog?.flush()
                 sessionLog = nil
 
@@ -525,6 +550,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             _ = session.finish()
             trigger.recordingBecameInactive(at: uptime)
             updateStatusItem()
+            fireRecordingFinishedHook(directory: directory)
 
             NSWorkspace.shared.activateFileViewerSelecting([transcriptURL])
         } catch {
@@ -540,6 +566,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     + "録音ファイルは残っています:\n\(directory.path)"
             )
         }
+    }
+
+    /// The user-visible "end" integration is deliberately after a usable
+    /// transcript exists, rather than when the WAV handles first close.
+    private func fireRecordingFinishedHook(directory: URL) {
+        fireRecordingHook(.stopped, directory: directory, startedAt: recordingStartedAt ?? Date())
+        recordingStartedAt = nil
     }
 
     /// Warn when the far side recorded silence.

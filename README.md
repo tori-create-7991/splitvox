@@ -175,10 +175,10 @@ SPLITVOX_SIGN_IDENTITY="任意の証明書名" bash scripts/make-app.sh
 ./Splitvox.app/Contents/MacOS/Splitvox --probe-detect 60
 ```
 
-出力先:
+出力先（リポジトリ直下の `Splitvox.app` を起動している開発時）:
 
 ```
-~/Library/Application Support/Splitvox/Recordings/<yyyyMMdd-HHmmss>/
+./Recordings/<yyyyMMdd-HHmmss>/
 ├── me.wav          あなたの声
 ├── them.wav        会議相手の声
 ├── transcript.md   話者ラベル付きの書き起こし
@@ -186,6 +186,17 @@ SPLITVOX_SIGN_IDENTITY="任意の証明書名" bash scripts/make-app.sh
 ```
 
 メニューバーの**「録音フォルダを開く」**からいつでも到達できます。
+
+`Splitvox.app` を `/Applications` などへ移した通常利用時は、書込み権限と配布の互換性のため
+`~/Library/Application Support/Splitvox/Recordings/` に保存されます。
+
+## 録音フック
+
+設定画面の「録音フック」で、録音開始時・文字起こし完了時それぞれにローカルコマンドと webhook URL を設定できます。
+コマンドは `/bin/zsh -lc` で最大15秒実行され、webhook は JSON の `POST` です。どちらも失敗しても録音を止めません。
+
+コマンド環境変数と webhook JSON には、イベント名、セッションフォルダ、録音開始時刻、発火時刻が含まれます。
+Webhook はセッションフォルダの絶対パスを外部へ送るため、信頼できるエンドポイントだけを設定してください。URLに含めたトークンは UserDefaults に平文保存されます。
 
 ## 診断コマンド
 
@@ -227,7 +238,7 @@ swift Tools/audio-process-watch.swift 60
 
 | データ | 保存先 | 送信先 | 削除 |
 |---|---|---|---|
-| 会議の音声 (`me.wav` / `them.wav`) | `~/Library/Application Support/Splitvox/Recordings/` | **なし** | 自動削除しません |
+| 会議の音声 (`me.wav` / `them.wav`) | 開発時: `./Recordings/`、通常時: `~/Library/Application Support/Splitvox/Recordings/` | **なし** | 自動削除しません |
 | 書き起こし (`transcript.md`) | 同上 | **なし** | 自動削除しません |
 | 診断ログ (`session.log`) | 同上 | **なし** | 自動削除しません |
 | 設定（アプリ一覧・除外一覧・入力デバイス・自動記録の条件と時間・言語） | `UserDefaults` | **なし** | — |

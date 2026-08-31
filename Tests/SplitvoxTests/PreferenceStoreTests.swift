@@ -168,4 +168,23 @@ struct PreferenceStoreTests {
 
         #expect(snapshot.meetingBundleIDs == ["com.google.Chrome"])
     }
+
+    @Test("録音フックの開始・終了設定は独立して保存される")
+    func recordingHooksRoundTripIndependently() {
+        let (store, _) = makeStore()
+
+        store.setRecordingHook(
+            RecordingHookConfiguration(command: "echo started", webhookURL: "https://example.com/start"),
+            for: .started
+        )
+        store.setRecordingHook(
+            RecordingHookConfiguration(command: "echo stopped", webhookURL: "https://example.com/stop"),
+            for: .stopped
+        )
+
+        #expect(store.recordingHook(for: .started).command == "echo started")
+        #expect(store.recordingHook(for: .started).webhookURL == "https://example.com/start")
+        #expect(store.recordingHook(for: .stopped).command == "echo stopped")
+        #expect(store.recordingHook(for: .stopped).webhookURL == "https://example.com/stop")
+    }
 }

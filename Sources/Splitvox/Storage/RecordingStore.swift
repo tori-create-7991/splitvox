@@ -14,7 +14,8 @@ enum RecordingStoreError: LocalizedError {
 /// Owns where a recording session's files live.
 ///
 /// The base directory is injected so tests can point at a temporary location;
-/// production uses Application Support. Same shape as `PendingQueue` in
+/// A development build run from a source checkout writes beside that checkout;
+/// an installed app uses Application Support. Same shape as `PendingQueue` in
 /// nani-mini.
 struct RecordingStore {
 
@@ -39,10 +40,27 @@ struct RecordingStore {
     }
 
     static func defaultBaseDirectory() -> URL {
-        FileManager.default
+        if let checkout = sourceCheckoutDirectory(for: Bundle.main.bundleURL) {
+            return checkout.appendingPathComponent(Config.recordingsDirectoryName, isDirectory: true)
+        }
+
+        return FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(Config.applicationSupportDirectoryName, isDirectory: true)
             .appendingPathComponent(Config.recordingsDirectoryName, isDirectory: true)
+    }
+
+    /// `make-app.sh` places Splitvox.app at a checkout's top level. Keep
+    /// recordings with that checkout while developing, but never assume an
+    /// installed bundle (for example, /Applications/Splitvox.app) is writable.
+    static func sourceCheckoutDirectory(
+        for bundleURL: URL,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        let parent = bundleURL.deletingLastPathComponent()
+        let packageManifest = parent.appendingPathComponent("Package.swift")
+        guard fileManager.fileExists(atPath: packageManifest.path) else { return nil }
+        return parent
     }
 
     /// Create a directory for one recording session.

@@ -87,6 +87,26 @@ struct RecordingStoreTests {
         #expect(FileManager.default.fileExists(atPath: first.path))
         #expect(FileManager.default.fileExists(atPath: second.path))
     }
+
+    @Test("A bundle next to Package.swift uses its source checkout")
+    func sourceCheckoutIsDetectedFromBundleLocation() throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+
+        try FileManager.default.createDirectory(at: fixture.base, withIntermediateDirectories: true)
+        let manifest = fixture.base.appendingPathComponent("Package.swift")
+        try "// test manifest".write(to: manifest, atomically: true, encoding: .utf8)
+        let bundle = fixture.base.appendingPathComponent("Splitvox.app", isDirectory: true)
+
+        #expect(RecordingStore.sourceCheckoutDirectory(for: bundle) == fixture.base)
+    }
+
+    @Test("An installed bundle does not claim its parent as a source checkout")
+    func installedBundleFallsBackFromSourceCheckout() {
+        let bundle = URL(fileURLWithPath: "/Applications/Splitvox.app", isDirectory: true)
+
+        #expect(RecordingStore.sourceCheckoutDirectory(for: bundle) == nil)
+    }
 }
 
 @Suite("RecordingStore — 必要な空き容量")

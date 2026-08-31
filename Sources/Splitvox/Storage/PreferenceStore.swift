@@ -29,6 +29,10 @@ struct PreferenceStore {
         static let warnOnSilentFarSide = "warnOnSilentFarSide"
         static let autoRecordAcknowledged = "autoRecordAcknowledged"
         static let excludedBundleIDs = "excludedBundleIDs"
+        static let recordingStartedCommand = "recordingStartedCommand"
+        static let recordingStartedWebhookURL = "recordingStartedWebhookURL"
+        static let recordingStoppedCommand = "recordingStoppedCommand"
+        static let recordingStoppedWebhookURL = "recordingStoppedWebhookURL"
     }
 
     private let defaults: UserDefaults
@@ -163,6 +167,35 @@ struct PreferenceStore {
     var excludedBundleIDs: [String] {
         get { Self.clean(defaults.stringArray(forKey: Key.excludedBundleIDs) ?? []) }
         nonmutating set { defaults.set(Self.clean(newValue), forKey: Key.excludedBundleIDs) }
+    }
+
+    /// Integrations are deliberately opt-in. Commands run locally with the
+    /// session metadata in environment variables; webhooks receive that same
+    /// metadata as JSON.
+    func recordingHook(for event: RecordingHookEvent) -> RecordingHookConfiguration {
+        switch event {
+        case .started:
+            return RecordingHookConfiguration(
+                command: defaults.string(forKey: Key.recordingStartedCommand) ?? "",
+                webhookURL: defaults.string(forKey: Key.recordingStartedWebhookURL) ?? ""
+            )
+        case .stopped:
+            return RecordingHookConfiguration(
+                command: defaults.string(forKey: Key.recordingStoppedCommand) ?? "",
+                webhookURL: defaults.string(forKey: Key.recordingStoppedWebhookURL) ?? ""
+            )
+        }
+    }
+
+    func setRecordingHook(_ hook: RecordingHookConfiguration, for event: RecordingHookEvent) {
+        switch event {
+        case .started:
+            defaults.set(hook.command, forKey: Key.recordingStartedCommand)
+            defaults.set(hook.webhookURL, forKey: Key.recordingStartedWebhookURL)
+        case .stopped:
+            defaults.set(hook.command, forKey: Key.recordingStoppedCommand)
+            defaults.set(hook.webhookURL, forKey: Key.recordingStoppedWebhookURL)
+        }
     }
 
     /// Locale must be one this build actually offers, so the Settings picker

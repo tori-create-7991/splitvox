@@ -22,6 +22,10 @@ struct SettingsView: View {
     @State private var warnOnSilentFarSide = true
     @State private var launchAtLogin = false
     @State private var loginItemMessage: String?
+    @State private var recordingStartedCommand = ""
+    @State private var recordingStartedWebhookURL = ""
+    @State private var recordingStoppedCommand = ""
+    @State private var recordingStoppedWebhookURL = ""
 
     /// Sentinel for "follow the system default", which is stored as nil.
     private static let systemDefaultTag = ""
@@ -219,6 +223,24 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("録音フック") {
+                Text("録音開始時と、文字起こし完了後にローカルコマンドと webhook を実行できます。フックの失敗は録音を止めません。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Group {
+                    TextField("開始時のローカルコマンド", text: $recordingStartedCommand)
+                    TextField("開始時の webhook URL", text: $recordingStartedWebhookURL)
+                    TextField("文字起こし完了時のローカルコマンド", text: $recordingStoppedCommand)
+                    TextField("文字起こし完了時の webhook URL", text: $recordingStoppedWebhookURL)
+                }
+                .textFieldStyle(.roundedBorder)
+
+                Text("コマンドには SPLITVOX_HOOK_EVENT、SPLITVOX_SESSION_DIRECTORY、SPLITVOX_RECORDING_STARTED_AT、SPLITVOX_HOOK_OCCURRED_AT を渡します。webhook は同じ値を JSON POST します。URL にトークンを含めると UserDefaults に平文で保存されます。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("ショートカット") {
                 KeyboardShortcuts.Recorder("録音の開始 / 停止", name: .toggleRecording)
 
@@ -259,6 +281,12 @@ struct SettingsView: View {
         transcriptionLocale = store.transcriptionLocaleIdentifier
         warnOnSilentFarSide = store.warnOnSilentFarSide
         excludedText = store.excludedBundleIDs.joined(separator: "\n")
+        let startedHook = store.recordingHook(for: .started)
+        recordingStartedCommand = startedHook.command
+        recordingStartedWebhookURL = startedHook.webhookURL
+        let stoppedHook = store.recordingHook(for: .stopped)
+        recordingStoppedCommand = stoppedHook.command
+        recordingStoppedWebhookURL = stoppedHook.webhookURL
 
         // Read from the system rather than from our own defaults: macOS is the
         // authority here, and the user can revoke it in System Settings.
@@ -426,6 +454,20 @@ struct SettingsView: View {
             .map { $0.trimmingCharacters(in: .whitespaces) }
 
         store.inputDeviceUID = selectedInputUID == Self.systemDefaultTag ? nil : selectedInputUID
+        store.setRecordingHook(
+            RecordingHookConfiguration(
+                command: recordingStartedCommand,
+                webhookURL: recordingStartedWebhookURL
+            ),
+            for: .started
+        )
+        store.setRecordingHook(
+            RecordingHookConfiguration(
+                command: recordingStoppedCommand,
+                webhookURL: recordingStoppedWebhookURL
+            ),
+            for: .stopped
+        )
 
         // Re-read so the field shows what was actually kept, including the
         // fallback to defaults when the list was emptied.
