@@ -8,6 +8,11 @@ struct AudioInputDevice: Equatable {
     let inputChannelCount: Int
 }
 
+struct HeadsetState: Equatable {
+    let external: Bool
+    let physical: Bool
+}
+
 /// Resolves input devices, which the aggregate device needs by UID.
 ///
 /// The device is user-selectable because a virtual microphone may sit between
@@ -96,14 +101,44 @@ enum AudioDeviceLookup {
     /// input means an external mic — a headset, earbuds, or a virtual device.
     static let builtInMicrophoneUID = "BuiltInMicrophoneDevice"
 
-    /// Whether the default input is something other than the built-in mic.
+    /// Whether the default input is external and whether it is real hardware.
     ///
     /// Used as the signal that a call is about to happen: putting on a headset
     /// is a deliberate act that precedes a meeting, and unlike watching for
     /// microphone use it does not depend on which application is running.
-    static func isExternalInputActive() -> Bool {
-        guard let device = defaultInputDeviceID(), let uid = uid(of: device) else { return false }
-        return uid != builtInMicrophoneUID
+    /// Virtual devices count as external but not physical.
+    static func headsetState() -> HeadsetState {
+        guard let device = defaultInputDeviceID() else {
+            return HeadsetState(external: false, physical: false)
+        }
+
+        return headsetState(uid: uid(of: device), transport: transportType(of: device))
+    }
+
+    /// Classifies a default input without performing Core Audio queries.
+    /// Keeping the lookup boundary here lets tests cover the complete device
+    /// partition while the production path passes the resulting value intact.
+    static func headsetState(uid: String?, transport: UInt32?) -> HeadsetState {
+        guard let uid, uid != builtInMicrophoneUID else {
+            return HeadsetState(external: false, physical: false)
+        }
+
+        let physical: Bool
+        switch transport {
+        case kAudioDeviceTransportTypeBluetooth,
+             kAudioDeviceTransportTypeBluetoothLE,
+             kAudioDeviceTransportTypeUSB,
+             kAudioDeviceTransportTypeThunderbolt,
+             kAudioDeviceTransportTypeFireWire,
+             kAudioDeviceTransportTypeDisplayPort,
+             kAudioDeviceTransportTypeHDMI,
+             kAudioDeviceTransportTypeBuiltIn:
+            physical = true
+        default:
+            physical = false
+        }
+
+        return HeadsetState(external: true, physical: physical)
     }
 
     /// Name of the current default input, for showing in diagnostics.
@@ -122,36 +157,6 @@ enum AudioDeviceLookup {
         return value
     }
 
-    /// Whether the default input is external *and* real hardware.
-    ///
-    /// Stricter than `isExternalInputActive`, which also accepts virtual
-    /// devices — Krisp and ZoomAudioDevice both register as inputs, so with the
-    /// looser check a recording can start while nothing is physically worn.
-    static func isPhysicalExternalInputActive() -> Bool {
-        guard let device = defaultInputDeviceID(),
-              let uid = uid(of: device),
-              uid != builtInMicrophoneUID,
-              let transport = transportType(of: device) else { return false }
-
-        switch transport {
-        case kAudioDeviceTransportTypeBluetooth,
-             kAudioDeviceTransportTypeBluetoothLE,
-             kAudioDeviceTransportTypeUSB,
-             kAudioDeviceTransportTypeThunderbolt,
-             kAudioDeviceTransportTypeFireWire,
-             kAudioDeviceTransportTypeDisplayPort,
-             kAudioDeviceTransportTypeHDMI:
-            return true
-        case kAudioDeviceTransportTypeBuiltIn:
-            // The headphone jack reports as built-in transport but is a
-            // different device from the internal microphone, and the UID check
-            // above has already excluded that one.
-            return true
-        default:
-            // Virtual, aggregate, and anything unrecognised.
-            return false
-        }
-    }
 
     /// The device to record the local speaker from: the user's choice when it
     /// is still present, otherwise the system default.

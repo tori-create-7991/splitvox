@@ -301,7 +301,7 @@ struct SettingsView: View {
     /// The counterpart of 再生中を検出: the same measurement, used to rule an
     /// application out rather than in.
     private func excludePlayingApps() {
-        let playing = Set(AudioProcessLookup.bundleIDsProducingOutput())
+        let playing = Set(AudioProcessLookup.bundleIDsProducingOutput().bundleIDs)
             .subtracting([Config.bundleIdentifier])
             .sorted()
 
@@ -407,7 +407,7 @@ struct SettingsView: View {
     /// documented and differ per app version. Measuring the running system is
     /// the only reliable way to get them, so it is offered directly here.
     private func detectPlayingApps() {
-        let playing = Set(AudioProcessLookup.bundleIDsProducingOutput())
+        let playing = Set(AudioProcessLookup.bundleIDsProducingOutput().bundleIDs)
             .subtracting([Config.bundleIdentifier])
             .sorted()
 

@@ -7,9 +7,9 @@ import Foundation
 /// enabled condition has to be true.
 ///
 /// The options are not fully orthogonal. `physicalInput` already implies
-/// `externalInput` — `isPhysicalExternalInputActive()` performs the same
-/// built-in-microphone check and then adds a transport-type test — so enabling
-/// both is equivalent to enabling `physicalInput` alone.
+/// `externalInput` — `AudioDeviceLookup.headsetState()` computes both values
+/// from the same input device, and the physical value adds a transport-type
+/// test — so enabling both is equivalent to enabling `physicalInput` alone.
 ///
 /// Enabling none disables the trigger entirely rather than matching everything.
 /// A condition set that fires unconditionally would record all day.

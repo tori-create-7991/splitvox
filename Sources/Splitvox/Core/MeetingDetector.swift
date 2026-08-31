@@ -91,8 +91,7 @@ enum MeetingDetector {
             capturing: AudioProcessLookup.bundleIDsConsumingInput(
                 excluding: [Config.bundleIdentifier]
             ),
-            headsetActive: AudioDeviceLookup.isExternalInputActive(),
-            physicalHeadsetActive: AudioDeviceLookup.isPhysicalExternalInputActive()
+            headset: AudioDeviceLookup.headsetState()
         )
     }
 
@@ -102,17 +101,16 @@ enum MeetingDetector {
     static func sample(
         meetingBundleIDs: [String],
         excludedBundleIDs: [String],
-        producing: [String],
-        capturing: [String],
-        headsetActive: Bool,
-        physicalHeadsetActive: Bool
+        producing: OutputProducers,
+        capturing: InputConsumers,
+        headset: HeadsetState
     ) -> Sample {
         Sample(
-            headsetActive: headsetActive,
-            physicalHeadsetActive: physicalHeadsetActive,
-            microphoneInUse: !filterCapturing(capturing, excluded: excludedBundleIDs).isEmpty,
+            headsetActive: headset.external,
+            physicalHeadsetActive: headset.physical,
+            microphoneInUse: !filterCapturing(capturing.bundleIDs, excluded: excludedBundleIDs).isEmpty,
             playing: filterPlaying(
-                producing: producing,
+                producing: producing.bundleIDs,
                 configured: meetingBundleIDs,
                 excluded: excludedBundleIDs
             )

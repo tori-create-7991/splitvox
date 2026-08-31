@@ -142,10 +142,9 @@ struct ExcludedBundleIDTests {
         let sample = MeetingDetector.sample(
             meetingBundleIDs: ["us.zoom.xos"],
             excludedBundleIDs: ["us.zoom.xos"],
-            producing: ["us.zoom.xos"],
-            capturing: ["us.zoom.xos"],
-            headsetActive: true,
-            physicalHeadsetActive: true
+            producing: OutputProducers(bundleIDs: ["us.zoom.xos"]),
+            capturing: InputConsumers(bundleIDs: ["us.zoom.xos"]),
+            headset: HeadsetState(external: true, physical: true)
         )
 
         #expect(sample.playing.isEmpty)
@@ -157,13 +156,26 @@ struct ExcludedBundleIDTests {
         let sample = MeetingDetector.sample(
             meetingBundleIDs: ["us.zoom.xos"],
             excludedBundleIDs: ["com.apple.Music"],
-            producing: ["us.zoom.xos"],
-            capturing: ["us.zoom.xos"],
-            headsetActive: true,
-            physicalHeadsetActive: true
+            producing: OutputProducers(bundleIDs: ["us.zoom.xos"]),
+            capturing: InputConsumers(bundleIDs: ["us.zoom.xos"]),
+            headset: HeadsetState(external: true, physical: true)
         )
 
         #expect(sample.playing == ["us.zoom.xos"])
         #expect(sample.microphoneInUse)
+    }
+
+    @Test("ヘッドセット状態は2つの条件へ正しい向きで届く")
+    func headsetStateReachesBothConditionsWithoutExchange() {
+        let sample = MeetingDetector.sample(
+            meetingBundleIDs: [],
+            excludedBundleIDs: [],
+            producing: OutputProducers(bundleIDs: []),
+            capturing: InputConsumers(bundleIDs: []),
+            headset: HeadsetState(external: true, physical: false)
+        )
+
+        #expect(sample.headsetActive)
+        #expect(sample.physicalHeadsetActive == false)
     }
 }

@@ -24,7 +24,7 @@ enum ProbeCommand {
             print("  [\(object)] \(bundle)\(active)")
         }
 
-        let producing = AudioProcessLookup.bundleIDsProducingOutput()
+        let producing = AudioProcessLookup.bundleIDsProducingOutput().bundleIDs
         print("\nbundle IDs producing output right now: \(producing.isEmpty ? "(none)" : "")")
         for id in Set(producing).sorted() {
             let covered = bundleIDs.contains(id) ? "captured" : "NOT captured"

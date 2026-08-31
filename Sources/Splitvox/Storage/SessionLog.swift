@@ -46,7 +46,7 @@ final class SessionLog {
     /// asked not to have it observed; honouring that in the trigger while
     /// writing it to disk every 15 seconds would be inconsistent.
     func logAudioSources(configured: [String], excluded: [String] = []) {
-        let playing = Set(AudioProcessLookup.bundleIDsProducingOutput())
+        let playing = Set(AudioProcessLookup.bundleIDsProducingOutput().bundleIDs)
             .subtracting([Config.bundleIdentifier])
             .filter { !MeetingDetector.isExcluded($0, by: excluded) }
 
