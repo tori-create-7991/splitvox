@@ -7,6 +7,9 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var statusItem: NSStatusItem?
+    private var notionPickers: [UUID: NotionNotePicker] = [:]
+    private var notionActivity = NotionActivityStatus()
+    private var notionStatus: String { notionActivity.summary }
     private var settingsWindow: NSWindow?
 
     private var session = RecordingSession()
@@ -168,6 +171,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyStatusImage(to: statusItem)
 
         let menu = NSMenu()
+        if preferences.notionConfiguration.enabled {
+            let item = NSMenuItem(title: notionStatus, action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+        }
 
         switch session.state {
         case .idle:
@@ -571,8 +579,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The user-visible "end" integration is deliberately after a usable
     /// transcript exists, rather than when the WAV handles first close.
     private func fireRecordingFinishedHook(directory: URL) {
-        fireRecordingHook(.stopped, directory: directory, startedAt: recordingStartedAt ?? Date())
+        let startedAt = recordingStartedAt ?? Date()
+        fireRecordingHook(.stopped, directory: directory, startedAt: startedAt)
+        syncNotion(directory: directory, startedAt: startedAt)
         recordingStartedAt = nil
+    }
+
+    private func syncNotion(directory: URL, startedAt: Date) {
+        let configuration = preferences.notionConfiguration
+        guard configuration.enabled else { return }
+        let jobID = UUID()
+        notionActivity.jobs[jobID] = "検索中"
+        updateStatusItem()
+        Task {
+            defer { notionActivity.jobs.removeValue(forKey: jobID); updateStatusItem() }
+            let log = SessionLog(directory: directory)
+            do {
+                let service = try await Task.detached { try NotionMeetingNotes(configuration: configuration) }.value
+                let candidates = try await Task.detached { try service.candidates(startedAt: startedAt) }.value
+                var selected = candidates.first?.id
+                if candidates.count > 1 {
+                    notionActivity.jobs[jobID] = "選択待ち"
+                    updateStatusItem()
+                    selected = await withCheckedContinuation { continuation in
+                        let pickerID = UUID()
+                        let picker = NotionNotePicker(notes: candidates, source: directory.lastPathComponent, startedAt: startedAt) { [weak self] choice in
+                            self?.notionPickers.removeValue(forKey: pickerID)
+                            continuation.resume(returning: choice)
+                        }
+                        notionPickers[pickerID] = picker
+                        picker.show()
+                    }
+                    guard selected != nil else {
+                        notionActivity.lastResult = "キャンセルしました"
+                        log.write("Notion: キャンセルしました"); log.flush(); updateStatusItem()
+                        return
+                    }
+                }
+                notionActivity.jobs[jobID] = "送信中"
+                updateStatusItem()
+                let target = selected
+                let message = try await Task.detached { try service.export(directory: directory, startedAt: startedAt, selectedNoteID: target) }.value
+                notionActivity.lastResult = "保存しました"
+                log.write(message)
+            } catch {
+                notionActivity.lastResult = "失敗（session.logを確認）"
+                log.write("Notion: " + error.localizedDescription)
+            }
+            log.flush()
+            updateStatusItem()
+        }
     }
 
     /// Warn when the far side recorded silence.

@@ -1,5 +1,9 @@
 import AppKit
 
+if CommandLine.arguments.contains("--notion-status") || CommandLine.arguments.contains("--notion-sync") {
+    exit(NotionCommand.run(CommandLine.arguments))
+}
+
 // Diagnostics run headless and exit; they must not start the menu bar app.
 if let index = CommandLine.arguments.firstIndex(of: "--probe-detect") {
     let seconds = CommandLine.arguments.dropFirst(index + 1).first.flatMap(Double.init) ?? 60
