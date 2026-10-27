@@ -41,6 +41,19 @@ struct PreferenceStore {
         self.defaults = defaults
     }
 
+    var notionConfiguration: NotionConfiguration {
+        get {
+            guard let data = defaults.data(forKey: "notionConfiguration"),
+                  var value = try? JSONDecoder().decode(NotionConfiguration.self, from: data) else { return NotionConfiguration() }
+            if !value.windowMinutes.isFinite { value.windowMinutes = 10 }
+            value.windowMinutes = min(120, max(1, value.windowMinutes))
+            return value
+        }
+        nonmutating set {
+            if let data = try? JSONEncoder().encode(newValue) { defaults.set(data, forKey: "notionConfiguration") }
+        }
+    }
+
     /// Applications whose output is captured.
     ///
     /// Falls back to the built-in list when the stored value is empty: an empty

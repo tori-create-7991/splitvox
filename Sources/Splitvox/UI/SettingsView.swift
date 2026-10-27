@@ -22,6 +22,7 @@ struct SettingsView: View {
     @State private var warnOnSilentFarSide = true
     @State private var launchAtLogin = false
     @State private var loginItemMessage: String?
+    @State private var notion = NotionConfiguration()
     @State private var recordingStartedCommand = ""
     @State private var recordingStartedWebhookURL = ""
     @State private var recordingStoppedCommand = ""
@@ -223,6 +224,15 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Notion Meeting Notes") {
+                Toggle("文字起こし完了後にNotionへ保存する", isOn: $notion.enabled)
+                TextField("ntnの絶対パス（空欄で自動検出）", text: $notion.cliPath)
+                TextField("新規作成先の親ページID（空欄でワークスペース直下）", text: $notion.parentPageID)
+                Stepper("開始時刻の照合: 前後\(Int(notion.windowMinutes))分", value: $notion.windowMinutes, in: 1...120)
+                Text("文字起こし全文をMeeting NoteのNotes欄へ送信します。音声は送りません。複数候補はアプリで選択し、候補がなければ新規作成します。事前にntn loginを実行してください。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
             Section("録音フック") {
                 Text("録音開始時と、文字起こし完了後にローカルコマンドと webhook を実行できます。フックの失敗は録音を止めません。")
                     .font(.caption)
@@ -268,6 +278,7 @@ struct SettingsView: View {
     }
 
     private func load() {
+        notion = store.notionConfiguration
         bundleIDText = store.meetingBundleIDs.joined(separator: "\n")
         inputDevices = AudioDeviceLookup.availableInputDevices()
         installedApps = InstalledAppLookup.scan()
@@ -449,6 +460,13 @@ struct SettingsView: View {
     }
 
     private func save() {
+        let parent = notion.parentPageID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard parent.isEmpty || UUID(uuidString: parent) != nil else {
+            savedMessage = "親ページIDはUUID形式で入力してください"
+            return
+        }
+        notion.parentPageID = parent
+        store.notionConfiguration = notion
         store.meetingBundleIDs = bundleIDText
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }
