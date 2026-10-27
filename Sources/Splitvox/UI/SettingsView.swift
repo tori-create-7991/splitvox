@@ -461,7 +461,7 @@ struct SettingsView: View {
 
     private func save() {
         let parent = notion.parentPageID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard parent.isEmpty || UUID(uuidString: parent) != nil else {
+        guard !notion.enabled || parent.isEmpty || UUID(uuidString: parent) != nil else {
             savedMessage = "親ページIDはUUID形式で入力してください"
             return
         }

@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Testing
 @testable import Splitvox
 
@@ -9,6 +10,7 @@ struct NotionMeetingNotesTests {
         let date = NotionNote.parseDate("2026-10-27T10:00:00Z")!
         let response: [String: Any] = ["results": [
             ["id": "first", "created_time": "2026-10-26T10:00:00Z", "meeting_notes": ["calendar_event": ["start_time": "2026-10-27T10:05:00Z"], "children": ["notes_block_id": "notes"]]],
+            ["id": "unfinished", "created_time": "2026-10-20T10:00:00Z", "meeting_notes": [:]],
             ["id": "other", "created_time": "2026-10-27T15:00:00Z", "meeting_notes": ["children": ["notes_block_id": "othernotes"]]]
         ]]
         let notes = try NotionNote.candidates(response, startedAt: date, window: 600)
@@ -51,6 +53,9 @@ private final class FakeNotionAPI {
     var blocks: [String: [[String: Any]]] = [:]
     var page: [String: Any]?
     var mutations = 0
+    var largestBatch = 0
+    var rejectCreate = false
+    var rejectBatch = false
     var failCreateAfterCommit = false
     var failCreateBeforeCommit = false
     var failChunkAfterCommit = false
@@ -64,6 +69,7 @@ private final class FakeNotionAPI {
         if endpoint == "/v1/search" { return ["results": page.map { [$0] } ?? [], "has_more": false] }
         if endpoint == "/v1/pages" {
             mutations += 1
+            if rejectCreate { rejectCreate = false; throw NotionFailure("denied", definiteRejection: true) }
             if failCreateBeforeCommit { failCreateBeforeCommit = false; throw NotionFailure("timeout") }
             page = ["id": pageID, "properties": body!["properties"]!]
             blocks[pageID] = [note]
@@ -74,10 +80,20 @@ private final class FakeNotionAPI {
         let parts = endpoint.split(separator: "?")[0].split(separator: "/")
         guard parts.count == 4, parts[3] == "children" else { throw NotionFailure("Unexpected fake endpoint") }
         let id = String(parts[2])
-        if method == "GET" { return ["results": blocks[id] ?? [], "has_more": false] }
+        if method == "GET" {
+            let components = URLComponents(string: "https://example.invalid" + endpoint)
+            let start = components?.queryItems?.first(where: { $0.name == "start_cursor" })?.value.flatMap(Int.init) ?? 0
+            let all = blocks[id] ?? []
+            let end = min(start + 100, all.count)
+            var result: [String: Any] = ["results": Array(all[start..<end]), "has_more": end < all.count]
+            if end < all.count { result["next_cursor"] = String(end) }
+            return result
+        }
         mutations += 1
         let children = body!["children"] as! [[String: Any]]
+        largestBatch = max(largestBatch, children.count)
         let isChunks = children.first?["type"] as? String == "paragraph"
+        if isChunks && rejectBatch { rejectBatch = false; throw NotionFailure("denied", definiteRejection: true) }
         if isChunks && failChunkBeforeCommit { failChunkBeforeCommit = false; throw NotionFailure("timeout") }
         let inserted = children.map { value -> [String: Any] in
             var block = value; block["id"] = UUID().uuidString; return block
@@ -161,4 +177,69 @@ struct NotionExportTests {
         try "changed".write(to: directory.appendingPathComponent("transcript.md"), atomically: true, encoding: .utf8)
         #expect(throws: (any Error).self) { try service.export(directory: directory, startedAt: date, selectedNoteID: api.noteID) }
     }
+    @Test("Definite creation rejection can be retried after configuration repair")
+    func deniedCreation() throws {
+        let directory = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+        let api = FakeNotionAPI(); api.rejectCreate = true
+        let service = NotionMeetingNotes(configuration: .init(), request: api.call)
+        #expect(throws: (any Error).self) { try service.export(directory: directory, startedAt: date) }
+        _ = try service.export(directory: directory, startedAt: date)
+        #expect(api.mutations == 4)
+    }
+    @Test("Definite text rejection clears pending uncertainty for a safe retry")
+    func deniedBatch() throws {
+        let directory = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+        let api = FakeNotionAPI(); api.rejectBatch = true
+        let service = NotionMeetingNotes(configuration: .init(), request: api.call)
+        #expect(throws: (any Error).self) { try service.export(directory: directory, startedAt: date, selectedNoteID: api.noteID) }
+        _ = try service.export(directory: directory, startedAt: date, selectedNoteID: api.noteID)
+        #expect(api.mutations == 3)
+    }
+    @Test("Duplicate picker labels preserve all IDs and later selections")
+    @MainActor func duplicateLabels() {
+        let notes = [NotionNote(id: "A", title: "Daily", notesID: "a", date: date),
+                     NotionNote(id: "B", title: "Daily", notesID: "b", date: date),
+                     NotionNote(id: "C", title: "Other", notesID: "c", date: date)]
+        let menu = NotionNotePicker.makeMenu(notes: notes)
+        #expect(menu.numberOfItems == 3)
+        #expect(menu.items.map { $0.representedObject as? String } == ["A", "B", "C"])
+    }
+    @Test("Completing one export keeps other pending choices visible")
+    func concurrentStatus() {
+        var status = NotionActivityStatus()
+        let first = UUID(), second = UUID()
+        status.jobs = [first: "送信中", second: "選択待ち"]
+        status.jobs.removeValue(forKey: first); status.lastResult = "保存しました"
+        #expect(status.summary.contains("処理中1件"))
+        #expect(status.summary.contains("選択待ち1件"))
+    }
+
+    @Test("Large transcripts are batched and existing Notes pagination is followed")
+    func largeExport() throws {
+        let directory = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+        let text = String(repeating: "日本語😃", count: 25000)
+        try text.write(to: directory.appendingPathComponent("transcript.md"), atomically: true, encoding: .utf8)
+        let api = FakeNotionAPI()
+        api.blocks[api.notesID] = Array(repeating: api.blocks[api.notesID]!.first!, count: 150)
+        let service = NotionMeetingNotes(configuration: .init(), request: api.call)
+        _ = try service.export(directory: directory, startedAt: date, selectedNoteID: api.noteID)
+        #expect(api.largestBatch <= 50)
+        #expect(api.mutations >= 3)
+        let groupID = api.blocks[api.notesID]!.last!["id"] as! String
+        #expect(api.blocks[groupID]!.map { NotionMeetingNotes.plainText($0, type: "paragraph") }.joined() == text)
+    }
+    @Test("Saturated date ranges subdivide and duplicate candidate IDs are removed")
+    func subdividedQuery() throws {
+        let api = FakeNotionAPI()
+        var calls = 0
+        let service = NotionMeetingNotes(configuration: .init()) { _, _, _ in
+            calls += 1
+            if calls == 1 { return ["results": Array(repeating: api.note, count: 50)] }
+            return ["results": [api.note]]
+        }
+        let candidates = try service.candidates(startedAt: date)
+        #expect(calls == 3)
+        #expect(candidates.map(\.id) == [api.noteID])
+    }
+
 }

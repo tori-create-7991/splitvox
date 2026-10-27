@@ -8,7 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var statusItem: NSStatusItem?
     private var notionPickers: [UUID: NotionNotePicker] = [:]
-    private var notionStatus = "Notion: 待機中"
+    private var notionActivity = NotionActivityStatus()
+    private var notionStatus: String { notionActivity.summary }
     private var settingsWindow: NSWindow?
 
     private var session = RecordingSession()
@@ -587,20 +588,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func syncNotion(directory: URL, startedAt: Date) {
         let configuration = preferences.notionConfiguration
         guard configuration.enabled else { return }
-        notionStatus = "Notion: 送信先を検索中"
+        let jobID = UUID()
+        notionActivity.jobs[jobID] = "検索中"
         updateStatusItem()
         Task {
+            defer { notionActivity.jobs.removeValue(forKey: jobID); updateStatusItem() }
             let log = SessionLog(directory: directory)
             do {
                 let service = try await Task.detached { try NotionMeetingNotes(configuration: configuration) }.value
                 let candidates = try await Task.detached { try service.candidates(startedAt: startedAt) }.value
                 var selected = candidates.first?.id
                 if candidates.count > 1 {
-                    notionStatus = "Notion: 保存先の選択待ち"
+                    notionActivity.jobs[jobID] = "選択待ち"
                     updateStatusItem()
                     selected = await withCheckedContinuation { continuation in
                         let pickerID = UUID()
-                        let picker = NotionNotePicker(notes: candidates) { [weak self] choice in
+                        let picker = NotionNotePicker(notes: candidates, source: directory.lastPathComponent, startedAt: startedAt) { [weak self] choice in
                             self?.notionPickers.removeValue(forKey: pickerID)
                             continuation.resume(returning: choice)
                         }
@@ -608,19 +611,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         picker.show()
                     }
                     guard selected != nil else {
-                        notionStatus = "Notion: キャンセルしました"
-                        log.write(notionStatus); log.flush(); updateStatusItem()
+                        notionActivity.lastResult = "キャンセルしました"
+                        log.write("Notion: キャンセルしました"); log.flush(); updateStatusItem()
                         return
                     }
                 }
-                notionStatus = "Notion: 送信中"
+                notionActivity.jobs[jobID] = "送信中"
                 updateStatusItem()
                 let target = selected
                 let message = try await Task.detached { try service.export(directory: directory, startedAt: startedAt, selectedNoteID: target) }.value
-                notionStatus = "Notion: 保存しました"
+                notionActivity.lastResult = "保存しました"
                 log.write(message)
             } catch {
-                notionStatus = "Notion: 失敗（session.logを確認）"
+                notionActivity.lastResult = "失敗（session.logを確認）"
                 log.write("Notion: " + error.localizedDescription)
             }
             log.flush()

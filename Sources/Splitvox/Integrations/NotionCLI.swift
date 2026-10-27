@@ -3,8 +3,9 @@ import Darwin
 
 struct NotionFailure: LocalizedError {
     let message: String
+    let definiteRejection: Bool
     var errorDescription: String? { message }
-    init(_ message: String) { self.message = message }
+    init(_ message: String, definiteRejection: Bool = false) { self.message = message; self.definiteRejection = definiteRejection }
 }
 
 /// Requests never inherit an open stdin or an ambient integration token.
@@ -51,28 +52,58 @@ struct NotionCLI {
         let out = try FileHandle(forWritingTo: output)
         let err = try FileHandle(forWritingTo: errors)
         defer { try? out.close(); try? err.close() }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
         var env = environment
         env.removeValue(forKey: "NOTION_API_TOKEN")
-        process.environment = env
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = out
-        process.standardError = err
-        let done = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in done.signal() }
-        try process.run()
-        if done.wait(timeout: .now() + timeout) == .timedOut {
-            process.terminate()
-            if done.wait(timeout: .now() + 2) == .timedOut {
-                kill(process.processIdentifier, SIGKILL)
-                _ = done.wait(timeout: .now() + 2)
-            }
-            throw NotionFailure("ntnがタイムアウトしました。送信済みの可能性があるため、状態を照合してから再試行してください。")
+        var argv = ([executable] + arguments).map { strdup($0) } + [nil]
+        var envp = env.map { strdup("\($0.key)=\($0.value)") } + [nil]
+        defer { argv.forEach { free($0) }; envp.forEach { free($0) } }
+        var attributes: posix_spawnattr_t?
+        var actions: posix_spawn_file_actions_t?
+        guard posix_spawnattr_init(&attributes) == 0 else { throw NotionFailure("ntn実行の準備に失敗しました。") }
+        defer { posix_spawnattr_destroy(&attributes) }
+        guard posix_spawn_file_actions_init(&actions) == 0 else { throw NotionFailure("ntn入出力の準備に失敗しました。") }
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        let input = Darwin.open("/dev/null", O_RDONLY)
+        guard input >= 0 else { throw NotionFailure("標準入力を閉じられませんでした。") }
+        defer { close(input) }
+        guard posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT)) == 0,
+              posix_spawnattr_setpgroup(&attributes, 0) == 0,
+              posix_spawn_file_actions_adddup2(&actions, input, STDIN_FILENO) == 0,
+              posix_spawn_file_actions_adddup2(&actions, out.fileDescriptor, STDOUT_FILENO) == 0,
+              posix_spawn_file_actions_adddup2(&actions, err.fileDescriptor, STDERR_FILENO) == 0 else {
+            throw NotionFailure("ntn実行グループの準備に失敗しました。")
         }
-        guard process.terminationStatus == 0 else {
-            throw NotionFailure("ntnが終了コード\(process.terminationStatus)で失敗しました。ターミナルでntn doctorを確認してください。")
+        var pid: pid_t = 0
+        let spawned = argv.withUnsafeMutableBufferPointer { av in
+            envp.withUnsafeMutableBufferPointer { ev in
+                posix_spawn(&pid, executable, &actions, &attributes, av.baseAddress!, ev.baseAddress!)
+            }
+        }
+        guard spawned == 0 else { throw NotionFailure("ntnを起動できませんでした（\(spawned)）。CLIパスを確認してください。", definiteRejection: true) }
+        // This process owns its group, including children of a CLI wrapper.
+        defer { kill(-pid, SIGKILL) }
+        var status: Int32 = 0
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+        while true {
+            let result = waitpid(pid, &status, WNOHANG)
+            if result == pid { break }
+            if result < 0 && errno != EINTR { throw NotionFailure("ntnの終了を確認できませんでした。") }
+            if ProcessInfo.processInfo.systemUptime >= deadline {
+                kill(-pid, SIGTERM)
+                // Child wrappers may inherit a blocked/ignored SIGTERM.
+                // Kill the owned group before releasing the session lock.
+                kill(-pid, SIGKILL)
+                _ = waitpid(pid, &status, 0)
+                throw NotionFailure("ntnがタイムアウトしました。送信済みの可能性があるため、状態を照合してから再試行してください。")
+            }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        guard status == 0 else {
+            let diagnostic = (try? String(contentsOf: errors, encoding: .utf8)) ?? ""
+            // Match the CLI's structured status prefix only; never expose its
+            // response text, which can contain URLs or user content.
+            let rejected = diagnostic.range(of: #"^error: Public API request failed \((400|401|403|404|413|422|429)\b"#, options: .regularExpression) != nil
+            throw NotionFailure("ntnが失敗しました。ntn doctorで認証と権限、親ページの設定を確認してください。", definiteRejection: rejected)
         }
         return try Data(contentsOf: output)
     }

@@ -40,8 +40,17 @@ struct NotionNote: Identifiable {
         guard blocks.count < 50, response["has_more"] as? Bool != true else {
             throw NotionFailure("検索結果が上限に達したため自動作成を停止しました。CLIで対象ノートを指定してください。")
         }
-        // Missing Notes on a plausible result must not silently become "no match".
-        return try blocks.map(decode).filter { abs($0.date.timeIntervalSince(startedAt)) <= window }.sorted { $0.date < $1.date }
+        // Notes IDs are optional on unrelated/unfinished notes. Filter by
+        // metadata first; only a plausible target requires a writable Notes tab.
+        return try blocks.compactMap { block -> NotionNote? in
+            guard let meeting = block["meeting_notes"] as? [String: Any] else { throw NotionFailure("ノート検索のメタデータが不正です。") }
+            let recording = meeting["recording"] as? [String: Any]
+            let calendar = meeting["calendar_event"] as? [String: Any]
+            let raw = recording?["start_time"] as? String ?? calendar?["start_time"] as? String ?? block["created_time"] as? String ?? ""
+            guard let date = parseDate(raw) else { throw NotionFailure("ノートの開始日時を確認できませんでした。") }
+            guard abs(date.timeIntervalSince(startedAt)) <= window else { return nil }
+            return try decode(block)
+        }.sorted { $0.date < $1.date }
     }
 }
 
@@ -198,7 +207,13 @@ final class NotionMeetingNotes {
                 guard parent.isEmpty || UUID(uuidString: parent) != nil else { throw NotionFailure("親ページIDが不正です。") }
                 state.phase = "creating"; try save()
                 let title = "Splitvox \(ISO8601DateFormatter().string(from: state.startedAt)) [\(state.sessionID)]"
-                let page = try request("POST", "/v1/pages", ["parent": parent.isEmpty ? ["workspace": true] : ["page_id": parent], "properties": ["title": ["title": Self.rich(title)]], "markdown_version": "v2", "markdown": Self.newNoteMarkdown()])
+                let page: [String: Any]
+                do {
+                    page = try request("POST", "/v1/pages", ["parent": parent.isEmpty ? ["workspace": true] : ["page_id": parent], "properties": ["title": ["title": Self.rich(title)]], "markdown_version": "v2", "markdown": Self.newNoteMarkdown()])
+                } catch {
+                    if (error as? NotionFailure)?.definiteRejection == true { state.phase = "ready"; try save() }
+                    throw error
+                }
                 guard let id = page["id"] as? String else { throw NotionFailure("ページ作成応答が不正です。") }
                 state.pageID = id; try save()
             }
@@ -213,7 +228,12 @@ final class NotionMeetingNotes {
         if groups.isEmpty {
             guard state.phase != "container" else { throw NotionFailure("追記先の作成結果が不明です。Notionを確認してから再試行してください。") }
             state.phase = "container"; try save()
-            _ = try request("PATCH", "/v1/blocks/\(note.notesID)/children", ["children": [["object": "block", "type": "toggle", "toggle": ["rich_text": Self.rich(marker)]]]])
+            do {
+                _ = try request("PATCH", "/v1/blocks/\(note.notesID)/children", ["children": [["object": "block", "type": "toggle", "toggle": ["rich_text": Self.rich(marker)]]]])
+            } catch {
+                if (error as? NotionFailure)?.definiteRejection == true { state.phase = "ready"; try save() }
+                throw error
+            }
             groups = try children(note.notesID).filter { $0["type"] as? String == "toggle" && Self.plainText($0, type: "toggle") == marker }
         }
         guard groups.count == 1, let groupID = groups.first?["id"] as? String else { throw NotionFailure("追記先の読み戻しに失敗しました。") }
@@ -232,7 +252,12 @@ final class NotionMeetingNotes {
             let end = min(stored.count + 50, chunks.count)
             let batch = chunks[stored.count..<end].map { ["object": "block", "type": "paragraph", "paragraph": ["rich_text": Self.rich($0)]] as [String: Any] }
             state.pendingCount = end; try save()
-            _ = try request("PATCH", "/v1/blocks/\(groupID)/children", ["children": batch])
+            do {
+                _ = try request("PATCH", "/v1/blocks/\(groupID)/children", ["children": batch])
+            } catch {
+                if (error as? NotionFailure)?.definiteRejection == true { state.pendingCount = nil; try save() }
+                throw error
+            }
             stored = try children(groupID)
             try validate()
             guard stored.count >= end else { throw NotionFailure("送信内容の読み戻しが一致しません。") }
@@ -240,5 +265,15 @@ final class NotionMeetingNotes {
         }
         state.completed = true; state.phase = "complete"; try save()
         return "送信完了: https://www.notion.so/" + note.id.replacingOccurrences(of: "-", with: "")
+    }
+}
+
+struct NotionActivityStatus {
+    var jobs: [UUID: String] = [:]
+    var lastResult = "待機中"
+    var summary: String {
+        guard !jobs.isEmpty else { return "Notion: " + lastResult }
+        let waiting = jobs.values.filter { $0 == "選択待ち" }.count
+        return "Notion: 処理中\(jobs.count)件（選択待ち\(waiting)件）"
     }
 }
