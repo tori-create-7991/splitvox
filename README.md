@@ -244,6 +244,7 @@ bash scripts/install-notion-hook.sh --migrate
   --started-at "$SPLITVOX_RECORDING_STARTED_AT" --window-minutes 10
 ```
 
+- DB内へ保存するには `--data-source <data-source-UUID> --date-property "Start Date"` を追加します。タイトル列はスキーマから取得し、日時列に録音開始日時を設定します。検索・追記もそのDB内に限定し、DB指定に失敗した場合は停止します。DB行に正式なMeeting Noteがない場合も重複作成せず停止します。
 - 開始時刻に近いMeeting Noteが1件ならNotes欄に追記、候補がなければ正式なMeeting Noteを含むページを新規作成します。`--parent-page <UUID>` が空ならワークスペース直下です。
 - **複数候補は書き込まずエラーで停止します。** アプリの選択画面はありません。dry-runで候補を確認し、`--note <meeting-note-block-id>` で指定して再実行してください。
 - 音声は送りません。文字起こしテキストをNotionへ送ります。Transcript欄への注入やNotion AI要約は行いません。既存Notesを保持し、録音ごとの折りたたみ欄へ追記します。
@@ -260,13 +261,15 @@ bash scripts/install-notion-hook.sh --migrate
   --write --note <meeting-note-block-id>
 ```
 
-`--started-at <ISO8601日時>`、`--ntn <絶対パス>`、`--parent-page <UUID>`、`--window-minutes <1〜120>` を指定できます。検索は開始の30日前から翌日までに作成されたノートを対象に、録音/カレンダー開始時刻（なければ作成時刻）を照合します。既定は前後10分です。検索上限では日付範囲を分割し、1日でも50件に達すると誤作成を避けて停止します。古いノートや候補が多い場合は `--note` を指定してください。
+`--started-at <ISO8601日時>`、`--ntn <絶対パス>`、`--parent-page <UUID>`、`--window-minutes <1〜120>`、`--data-source <UUID>`、`--date-property <列名>` を指定できます。DB指定と空でない親ページ指定は併用できません。DB指定時は日時列（既定 `Start Date`）の開始時刻が前後の窓に入る行を全ページ検索し、`--note` のDB所属も確認します。DB未指定時の検索は開始の30日前から翌日までに作成されたノートを対象に、録音/カレンダー開始時刻（なければ作成時刻）を照合します。既定は前後10分です。検索上限では日付範囲を分割し、1日でも50件に達すると誤作成を避けて停止します。古いノートや候補が多い場合は `--note` を指定してください。
 
 フック内の独立CLIも同じプロセスグループで実行します。内側のAPIタイムアウトではグループを停止し、未確定の送信を自動で繰り返さないようジャーナルとロックを保持します。
 
 CLIのエラーは録音フォルダの `session.log`、送信状態は `.notion-sync.json` に残ります。タイムアウト時は送信済みの可能性があり、次の実行で先にNotionの内容を照合します。照合できなければ再送を止めます。強制終了で `.notion-sync.lock` が残った場合は、送信処理が動いていないことと送信状態を確認してから、そのロックだけを削除してください。ジャーナルを消しての再実行は二重送信の原因になります。
 
-新規作成はNotionのMarkdown v2プレビューを利用します。[独立CLIの設計](docs/design/external-notion-cli.md)・[ローカルフックの設計](docs/design/local-hooks.md)
+完了済みジャーナルはDB指定を追加しても再送しません。未完了の送信先は変更せず、旧ジャーナルの未確定作成も照合してから進めます。
+
+新規作成はNotionのMarkdown v2プレビューを利用します。[DB保存の設計](docs/design/notion-database-destination.md)・[独立CLIの設計](docs/design/external-notion-cli.md)・[ローカルフックの設計](docs/design/local-hooks.md)
 
 ## 診断コマンド
 

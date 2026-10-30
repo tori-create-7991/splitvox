@@ -39,7 +39,7 @@ struct CLIIntegrationTests {
                                      "phase": "complete", "noteID": note, "completed": true]
         try JSONSerialization.data(withJSONObject: journal).write(to: directory.appendingPathComponent(".notion-sync.json"))
         let fake = try script("touch \"\(directory.path)/unexpected-api\"; exit 99", in: directory)
-        let output = try invoke(["--notion-sync", directory.path, "--started-at", "2026-10-30T00:00:00Z", "--ntn", fake.path, "--write"])
+        let output = try invoke(["--notion-sync", directory.path, "--started-at", "2026-10-30T00:00:00Z", "--ntn", fake.path, "--data-source", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "--write"])
         #expect(String(decoding: output, as: UTF8.self).contains("送信済み"))
         #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("unexpected-api").path))
     }
@@ -95,4 +95,28 @@ struct CLIIntegrationTests {
         #expect(repeated["applied"] as? Bool == false)
         #expect(repeated["changedHooks"] as? Int == 0)
     }
+    @Test("Binary dry-run passes the data-source date filter to ntn without mutations")
+    func databaseDryRun() throws {
+        let directory = try folder(); defer { try? FileManager.default.removeItem(at: directory) }
+        let id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        let fake = try script("""
+        case "$2:$4" in
+          /v1/data_sources/\(id):GET)
+            printf '%s' '{"properties":{"Meeting name":{"type":"title"},"Recorded at":{"type":"date"}}}' ;;
+          /v1/data_sources/\(id)/query:POST)
+            cp "${8#@}" "\(directory.path)/query.json"
+            printf '%s' '{"results":[],"has_more":false}' ;;
+          *) touch "\(directory.path)/unexpected"; exit 9 ;;
+        esac
+        """, in: directory)
+        let output = try invoke(["--notion-sync", directory.path, "--started-at", "2026-10-30T01:00:00Z", "--ntn", fake.path,
+                                 "--data-source", id, "--date-property", "Recorded at"])
+        #expect(String(decoding: output, as: UTF8.self).contains("dry-run: 0 candidate(s)"))
+        let query = try JSONSerialization.jsonObject(with: Data(contentsOf: directory.appendingPathComponent("query.json"))) as! [String: Any]
+        let clauses = (query["filter"] as? [String: Any])?["and"] as? [[String: Any]]
+        #expect(clauses?.first?["property"] as? String == "Recorded at")
+        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("unexpected").path))
+        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent(".notion-sync.json").path))
+    }
+
 }

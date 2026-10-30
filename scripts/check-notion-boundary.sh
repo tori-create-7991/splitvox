@@ -17,7 +17,7 @@ assert_absent() {
         [ "$status" -eq 1 ] || { echo "FAIL: search failed (exit $status)" >&2; return 1; }
     fi
 }
-pattern='NotionCommand|NotionMeetingNotes|NotionCLI|NotionConfiguration|notionConfiguration|--notion-sync|--notion-status|/v1/blocks/meeting_notes'
+pattern='NotionDataSource|NotionCommand|NotionMeetingNotes|NotionCLI|NotionConfiguration|notionConfiguration|--notion-sync|--notion-status|/v1/blocks/meeting_notes'
 assert_absent "$pattern" Sources/Splitvox
 assert_absent 'notion-exporter|SplitvoxNotion' Package.swift
 assert_absent 'import (AppKit|Splitvox|KeyboardShortcuts)|package\(url:' Tools/notion-exporter/Package.swift Tools/notion-exporter/Sources

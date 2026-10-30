@@ -6,6 +6,8 @@ struct NotionConfiguration: Codable, Equatable {
     var cliPath = ""
     var parentPageID = ""
     var windowMinutes = 10.0
+    var dataSourceID = ""
+    var dateProperty = "Start Date"
 }
 
 struct NotionNote: Identifiable {
@@ -62,6 +64,7 @@ private struct NotionJournal: Codable {
     var noteID: String?
     var pendingCount: Int?
     var completed = false
+    var dataSourceID: String?
 }
 
 /// All mutations are journaled before dispatch. An uncertain request is never
@@ -81,7 +84,12 @@ final class NotionMeetingNotes {
         self.init(configuration: configuration, request: cli.call)
     }
 
+    private var dataSource: NotionDataSource? {
+        configuration.dataSourceID.isEmpty ? nil : NotionDataSource(configuration: configuration, request: request, children: children)
+    }
+
     func candidates(startedAt: Date) throws -> [NotionNote] {
+        if let dataSource { return try dataSource.candidates(startedAt: startedAt) }
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
@@ -183,9 +191,18 @@ final class NotionMeetingNotes {
         try save()
         if let selectedNoteID, let bound = state.noteID, bound != selectedNoteID { throw NotionFailure("この録音には別の送信先が記録されています。") }
         if state.completed, let id = state.noteID { return "送信済み: https://www.notion.so/" + id.replacingOccurrences(of: "-", with: "") }
+        let destination = dataSource
+        let targetID = destination?.id ?? ""
+        if let bound = state.dataSourceID {
+            guard bound == targetID else { throw NotionFailure("未完了の録音は送信先DBを変更できません。") }
+        } else if state.phase == "ready", state.pageID == nil, state.noteID == nil {
+            state.dataSourceID = targetID
+            try save()
+        }
         if state.noteID == nil {
             if let selectedNoteID {
                 guard UUID(uuidString: selectedNoteID) != nil else { throw NotionFailure("Meeting Note IDが不正です。") }
+                if let destination { try destination.verifyNote(request("GET", "/v1/blocks/\(selectedNoteID)", nil)) }
                 state.noteID = selectedNoteID
                 try save()
             } else if state.phase == "ready" {
@@ -197,18 +214,25 @@ final class NotionMeetingNotes {
         }
         if state.noteID == nil {
             if state.pageID == nil, state.phase == "creating" {
-                state.pageID = try searchPage(marker: state.sessionID)
+                // Old journals may have created a workspace page. Reconcile in
+                // their original scope before applying a new DB membership check.
+                if state.dataSourceID != nil, let destination {
+                    state.pageID = try destination.findPage(marker: state.sessionID)
+                } else { state.pageID = try searchPage(marker: state.sessionID) }
                 guard state.pageID != nil else { throw NotionFailure("新規作成の結果が不明です。重複を避けるため再作成を停止しました。NotionでセッションID \(state.sessionID) を検索してください。") }
                 try save()
             }
             if state.pageID == nil {
                 let parent = configuration.parentPageID.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard parent.isEmpty || UUID(uuidString: parent) != nil else { throw NotionFailure("親ページIDが不正です。") }
-                state.phase = "creating"; try save()
                 let title = "Splitvox \(ISO8601DateFormatter().string(from: state.startedAt)) [\(state.sessionID)]"
+                let body: [String: Any]
+                if let destination { body = try destination.creationBody(title: title, startedAt: state.startedAt) }
+                else { body = ["parent": parent.isEmpty ? ["workspace": true] : ["page_id": parent], "properties": ["title": ["title": Self.rich(title)]], "markdown_version": "v2", "markdown": Self.newNoteMarkdown()] }
+                state.phase = "creating"; try save()
                 let page: [String: Any]
                 do {
-                    page = try request("POST", "/v1/pages", ["parent": parent.isEmpty ? ["workspace": true] : ["page_id": parent], "properties": ["title": ["title": Self.rich(title)]], "markdown_version": "v2", "markdown": Self.newNoteMarkdown()])
+                    page = try request("POST", "/v1/pages", body)
                 } catch {
                     if (error as? NotionFailure)?.definiteRejection == true { state.phase = "ready"; try save() }
                     throw error
@@ -216,11 +240,17 @@ final class NotionMeetingNotes {
                 guard let id = page["id"] as? String else { throw NotionFailure("ページ作成応答が不正です。") }
                 state.pageID = id; try save()
             }
+            if let destination { try destination.verifyPage(state.pageID!) }
             let blocks = try children(state.pageID!)
-            guard let note = blocks.first(where: { $0["type"] as? String == "meeting_notes" }), let id = note["id"] as? String else { throw NotionFailure("正式なMeeting Noteが作成されませんでした。Markdown v2の対応状況を確認してください。") }
+            let notes = blocks.filter { $0["type"] as? String == "meeting_notes" }
+            guard notes.count <= 1 else { throw NotionFailure("ページにMeeting Noteが複数あります。--note <ID>で指定してください。") }
+            guard let id = notes.first?["id"] as? String else { throw NotionFailure("正式なMeeting Noteが作成されませんでした。Markdown v2の対応状況を確認してください。") }
             state.noteID = id; state.phase = "ready"; try save()
         }
-        let note = try NotionNote.decode(request("GET", "/v1/blocks/\(state.noteID!)", nil))
+        let block = try request("GET", "/v1/blocks/\(state.noteID!)", nil)
+        if let destination { try destination.verifyNote(block) }
+        state.dataSourceID = targetID; try save()
+        let note = try NotionNote.decode(block)
         let marker = "Splitvox \(directory.lastPathComponent) [\(state.sessionID)]"
         var groups = try children(note.notesID).filter { $0["type"] as? String == "toggle" && Self.plainText($0, type: "toggle") == marker }
         guard groups.count <= 1 else { throw NotionFailure("同じセッションの書き込みが複数あります。") }

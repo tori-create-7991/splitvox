@@ -20,7 +20,24 @@ The installed binary defaults to `~/.local/bin/splitvox-notion`. For a hook:
 
 Omit `--write` for dry-run. Set `--ntn /absolute/path/to/ntn` if PATH discovery
 cannot find the CLI. `--parent-page <UUID>` controls only the new-page parent;
-empty means workspace root. It does not target a database. One matching note is
+empty means workspace root. For a database, use its **data source UUID** instead:
+
+```sh
+"$HOME/.local/bin/splitvox-notion" \
+  --notion-sync "$SPLITVOX_SESSION_DIRECTORY" --write \
+  --started-at "$SPLITVOX_RECORDING_STARTED_AT" \
+  --data-source <data-source-uuid> --date-property "Start Date"
+```
+
+A nonempty `--parent-page` and `--data-source` cannot be combined. The title
+column is discovered from the schema; the chosen date column (default
+`Start Date`) receives the recording start. Searches are paginated within this
+data source and use that date ± the configured window. An invalid schema,
+unverifiable membership, or matching row without a native note stops export;
+there is no workspace fallback. Explicit `--note` must belong to the selected
+data source. No DB schema or template is modified.
+
+One matching note is
 appended to, no candidate creates a native Meeting Note, and multiple candidates
 stop until `--note <UUID>` is supplied. Text goes to Notes; no audio is sent.
 Normal export/status reads explicit arguments and ntn authentication only.
@@ -52,7 +69,10 @@ installed/started if migration reports a custom old invocation.
 ## Recovery
 
 Existing `.notion-sync.json` and `.notion-sync.lock` formats are retained.
-Completed export retries do not send again. Uncertain writes reconcile remote
+Completed export retries do not send again, including when adding a DB destination.
+Unfinished exports bind to their original destination. Legacy uncertain creations
+first reconcile in their original scope and must pass DB membership checks
+before any further write; do not delete journals to redirect them. Uncertain writes reconcile remote
 state or stop; never clear journal/lock files to force a resend. Logs are appended
 locally. API commands close stdin, remove ambient `NOTION_API_TOKEN` and suppress
 raw error output. API children share a verified optional host group when used

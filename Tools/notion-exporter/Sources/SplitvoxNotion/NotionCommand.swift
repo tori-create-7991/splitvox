@@ -4,24 +4,44 @@ enum NotionCommand {
     /// Pure arguments only. Normal export never reads host-app preferences.
     static func configuration(_ arguments: [String], base: NotionConfiguration = NotionConfiguration()) throws -> NotionConfiguration {
         var config = base
-        for flag in ["--ntn", "--parent-page", "--window-minutes"] {
-            let indices = arguments.indices.filter { arguments[$0] == flag }
-            guard indices.count <= 1 else { throw NotionFailure("引数が重複しています: " + flag) }
-            if let index = indices.first {
-                guard arguments.indices.contains(index + 1), !arguments[index + 1].hasPrefix("--") else {
-                    throw NotionFailure("引数に値が必要です: " + flag)
-                }
-                let value = arguments[index + 1]
-                switch flag {
-                case "--ntn": config.cliPath = value
-                case "--parent-page": config.parentPageID = value
-                default:
-                    guard let minutes = Double(value), minutes.isFinite, (1...120).contains(minutes) else {
-                        throw NotionFailure("--window-minutesは1〜120の有限数で指定してください。")
-                    }
-                    config.windowMinutes = minutes
-                }
+        let valueFlags: Set<String> = ["--ntn", "--parent-page", "--window-minutes", "--data-source", "--date-property", "--notion-sync", "--started-at", "--note"]
+        let switches: Set<String> = ["--write", "--notion-status"]
+        var index = 0, seen: Set<String> = []
+        while index < arguments.count {
+            let flag = arguments[index]
+            guard valueFlags.contains(flag) || switches.contains(flag) else {
+                throw NotionFailure("不明な引数があります。--helpで指定方法を確認してください。")
             }
+            guard seen.insert(flag).inserted else { throw NotionFailure("引数が重複しています: " + flag) }
+            if switches.contains(flag) { index += 1; continue }
+            guard arguments.indices.contains(index + 1), !arguments[index + 1].hasPrefix("--") else {
+                throw NotionFailure("引数に値が必要です: " + flag)
+            }
+            let value = arguments[index + 1]
+            switch flag {
+            case "--ntn": config.cliPath = value
+            case "--parent-page": config.parentPageID = value
+            case "--data-source": config.dataSourceID = value
+            case "--date-property": config.dateProperty = value
+            case "--window-minutes":
+                guard let minutes = Double(value), minutes.isFinite, (1...120).contains(minutes) else {
+                    throw NotionFailure("--window-minutesは1〜120の有限数で指定してください。")
+                }
+                config.windowMinutes = minutes
+            default: break // Operation values are consumed by run after validation.
+            }
+            index += 2
+        }
+        if arguments.contains("--data-source") || !config.dataSourceID.isEmpty {
+            guard let id = UUID(uuidString: config.dataSourceID), config.parentPageID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw NotionFailure("--data-sourceにはUUIDを指定し、--parent-pageとは併用しないでください。")
+            }
+            guard !config.dateProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw NotionFailure("--date-propertyには日時列名を指定してください。")
+            }
+            config.dataSourceID = id.uuidString.lowercased()
+        } else if arguments.contains("--date-property") {
+            throw NotionFailure("--date-propertyには--data-sourceが必要です。")
         }
         return config
     }
@@ -35,7 +55,7 @@ enum NotionCommand {
             let config = try configuration(arguments)
             let cli = try NotionCLI(path: config.cliPath)
             if arguments.contains("--notion-status") {
-                let data = try JSONSerialization.data(withJSONObject: ["mode": "standalone_cli_configuration", "cli": cli.executable, "windowMinutes": config.windowMinutes, "parentConfigured": !config.parentPageID.isEmpty], options: [.sortedKeys])
+                let data = try JSONSerialization.data(withJSONObject: ["mode": "standalone_cli_configuration", "cli": cli.executable, "windowMinutes": config.windowMinutes, "parentConfigured": !config.parentPageID.isEmpty, "dataSource": config.dataSourceID, "dateProperty": config.dataSourceID.isEmpty ? "" : config.dateProperty], options: [.sortedKeys])
                 print(String(decoding: data, as: UTF8.self))
                 return 0
             }

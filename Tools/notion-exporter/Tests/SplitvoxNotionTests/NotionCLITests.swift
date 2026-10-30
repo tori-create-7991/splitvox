@@ -64,3 +64,50 @@ struct NotionCLITests {
     }
 
 }
+
+// Unit: destination arguments fail before any API or preferences access.
+@Suite("Notion database destination arguments")
+struct NotionDestinationArgumentTests {
+    @Test("Database destination flags validate UUID, property and exclusive parent")
+    func invalidDestinationArguments() {
+        let id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        for args in [
+            ["--data-source", "not-a-uuid"],
+            ["--data-source", ""],
+            ["--data-source"],
+            ["--data-source", id, "--data-source", id],
+            ["--date-property", "Start Date"],
+            ["--data-source", id, "--date-property", ""],
+            ["--data-source", id, "--date-property"],
+            ["--data-source", id, "--parent-page", id]
+        ] {
+            #expect(throws: (any Error).self) { try NotionCommand.configuration(args) }
+        }
+    }
+}
+
+// Unit: destination normalization is stable for journal bindings.
+@Test("Database destination accepts an empty legacy parent and preserves date column")
+func validDatabaseDestinationArguments() throws {
+    let config = try NotionCommand.configuration(["--data-source", "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA", "--parent-page", "", "--date-property", "Recorded at"])
+    #expect(config.dataSourceID == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+    #expect(config.dateProperty == "Recorded at")
+}
+
+// Unit: a mistyped destination must never enter workspace export mode.
+@Test("Unknown options and stray argument values are rejected")
+func unknownExportArguments() {
+    for args in [["--data-sorce", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"], ["--write", "unexpected"], ["--note"], ["--notion-status", "--notion-status"]] {
+        #expect(throws: (any Error).self) { try NotionCommand.configuration(args) }
+    }
+}
+
+// Unit: run persists this error in session.log, so arbitrary values stay private.
+@Test("Unknown argument diagnostics never reflect positional content")
+func unknownArgumentPrivacy() {
+    let marker = "synthetic-sensitive-positional-value"
+    do {
+        _ = try NotionCommand.configuration(["--write", marker])
+        Issue.record("Expected argument rejection")
+    } catch { #expect(!error.localizedDescription.contains(marker)) }
+}
