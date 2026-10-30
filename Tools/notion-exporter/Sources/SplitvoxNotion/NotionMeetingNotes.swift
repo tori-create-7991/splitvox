@@ -206,7 +206,12 @@ final class NotionMeetingNotes {
         if state.noteID == nil {
             if let selectedNoteID {
                 guard UUID(uuidString: selectedNoteID) != nil else { throw NotionFailure("Meeting Note IDが不正です。") }
-                if let destination { try destination.verifyNote(request("GET", "/v1/blocks/\(selectedNoteID)", nil)) }
+                if let destination {
+                    let pageID = try destination.verifyNote(request("GET", "/v1/blocks/\(selectedNoteID)", nil))
+                    if let created = state.pageID, UUID(uuidString: created) != UUID(uuidString: pageID) {
+                        throw NotionFailure("作成済みページと指定ノートのページが異なります。")
+                    }
+                }
                 state.noteID = selectedNoteID
                 try save()
             } else if state.phase == "ready" {

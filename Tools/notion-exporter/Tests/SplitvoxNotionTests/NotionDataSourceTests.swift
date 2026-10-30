@@ -317,4 +317,29 @@ struct NotionDataSourceTests {
         #expect(api.datePatches == 1)
     }
 
+    @Test("Wrong same-DB row selection cannot poison creation recovery")
+    func wrongRowRecovery() throws {
+        let api = DatabaseAPI(), dir = try api.fixture()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let otherPage = "11111111-1111-4111-8111-111111111111"
+        let otherNote = "22222222-2222-4222-8222-222222222222"
+        let service = NotionMeetingNotes(configuration: api.config) { method, path, body in
+            if path == "/v1/blocks/" + otherNote {
+                var note = api.note; note["id"] = otherNote; note["parent"] = ["type": "page_id", "page_id": otherPage]; return note
+            }
+            if path == "/v1/pages/" + otherPage { var page = api.row; page["id"] = otherPage; return page }
+            return try api.call(method, path, body)
+        }
+        api.createTimeout = true
+        #expect(throws: (any Error).self) { try service.export(directory: dir, startedAt: api.date) }
+        api.blocks[api.pageID] = [] // Page found before native block is ready.
+        #expect(throws: (any Error).self) { try service.export(directory: dir, startedAt: api.date) }
+        api.blocks[api.pageID] = [api.note]
+        #expect(throws: (any Error).self) { try service.export(directory: dir, startedAt: api.date, selectedNoteID: otherNote) }
+        let state = try JSONSerialization.jsonObject(with: Data(contentsOf: dir.appendingPathComponent(".notion-sync.json"))) as! [String: Any]
+        #expect(state["noteID"] == nil)
+        _ = try service.export(directory: dir, startedAt: api.date, selectedNoteID: api.noteID)
+        #expect(api.mutations == 3)
+    }
+
 }
