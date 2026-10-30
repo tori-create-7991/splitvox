@@ -92,40 +92,6 @@ struct LocalCommandRunnerTests {
         #expect(text.split(separator: "\n").count == 100)
     }
 
-    @Test("Outer hook timeout also terminates the real headless exporter fake CLI group")
-    func nestedExporterTimeout() throws {
-        let directory = try folder(); defer { try? FileManager.default.removeItem(at: directory) }
-        try "Synthetic transcript".write(to: directory.appendingPathComponent("transcript.md"), atomically: true, encoding: .utf8)
-        let fake = directory.appendingPathComponent("fake-ntn")
-        try """
-        #!/bin/sh
-        trap '' HUP TERM
-        touch "$SPLITVOX_SESSION_DIRECTORY/ntn-started"
-        printf '%s' "$_SPLITVOX_LOCAL_HOOK_GROUP" > "$SPLITVOX_SESSION_DIRECTORY/outer-group"
-        /bin/ps -o pgid= -p $$ > "$SPLITVOX_SESSION_DIRECTORY/ntn-group"
-        (sleep 2; touch "$SPLITVOX_SESSION_DIRECTORY/leaked") &
-        wait
-        """.write(to: fake, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fake.path)
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let executable = root.appendingPathComponent(".build/debug/Splitvox")
-        #expect(FileManager.default.isExecutableFile(atPath: executable.path))
-        let command = LocalHookMigration.quote(executable.path)
-            + " --notion-sync \"$SPLITVOX_SESSION_DIRECTORY\" --write --started-at \"$SPLITVOX_RECORDING_STARTED_AT\""
-            + " --ntn " + LocalHookMigration.quote(fake.path) + " --parent-page '' --window-minutes 10"
-        #expect(LocalCommandRunner.run(.init(name: "Nested", command: command, timeoutSeconds: 1), context: context(directory)) == .timedOut)
-        // Positive control: absence is meaningful only if the fake API process ran.
-        #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("ntn-started").path))
-        let outerGroup = try String(contentsOf: directory.appendingPathComponent("outer-group"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-        let nestedGroup = try String(contentsOf: directory.appendingPathComponent("ntn-group"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-        #expect(!outerGroup.isEmpty)
-        #expect(nestedGroup == outerGroup)
-        Thread.sleep(forTimeInterval: 1.5)
-        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("leaked").path))
-        #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent(".notion-sync.json").path))
-        #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent(".notion-sync.lock").path))
-    }
-
     @Test("Webhook transport preserves JSON metadata and logs only status")
     func webhookTransport() throws {
         let directory = try folder(); defer { try? FileManager.default.removeItem(at: directory) }

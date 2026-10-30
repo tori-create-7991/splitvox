@@ -1,9 +1,5 @@
 import AppKit
 
-if CommandLine.arguments.contains("--notion-status") || CommandLine.arguments.contains("--notion-sync") {
-    exit(NotionCommand.run(CommandLine.arguments))
-}
-
 // Diagnostics run headless and exit; they must not start the menu bar app.
 if let index = CommandLine.arguments.firstIndex(of: "--probe-detect") {
     let seconds = CommandLine.arguments.dropFirst(index + 1).first.flatMap(Double.init) ?? 60
@@ -104,6 +100,13 @@ if let index = CommandLine.arguments.firstIndex(of: "--probe-record") {
             .appendingPathComponent("splitvox-probe", isDirectory: true)
     )
     exit(0)
+}
+
+// Unknown CLI options must fail before starting an accessory process. Host
+// integrations belong to external commands, rather than compatibility shims.
+if CommandLine.arguments.dropFirst().contains(where: { $0.hasPrefix("--") }) {
+    fputs("Splitvox: unknown option. Configure integrations as external local commands.\n", stderr)
+    exit(2)
 }
 
 // Menu-bar-only app: no Dock icon, no Cmd+Tab entry.

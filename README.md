@@ -220,18 +220,28 @@ SPLITVOX_SIGN_IDENTITY="任意の証明書名" bash scripts/make-app.sh
 
 標準入力は閉じ、標準出力・標準エラーは破棄します。`session.log` にはフックID、イベント、開始/終了/タイムアウト、終了コードを記録し、コマンドやその出力は記録しません。設定内のIDとログのUUIDで対応を確認できます。詳しい診断が必要な場合は、スクリプト側で秘密や文字起こしの扱いに配慮してファイルへ保存してください。Webhookはセッションフォルダの絶対パスを外部へ送ります。URLやコマンドに書いた認証情報はUserDefaultsに平文保存されます。
 
-旧設定は初回に一度だけ移行します。旧コマンドは15秒、旧Notion設定は元の有効/無効とCLI・親ページ・照合窓を保持した通常コマンド（600秒）になります。Webhook URLは変わりません。移行後に削除したコマンドは復活しません。旧設定はロールバック用に保持されますが、通常アプリから別途Notionへ自動送信する経路はありません。アプリを移動したときは移行済みコマンド内の実行パスも更新してください。設定破損・非対応バージョンではコマンドを停止し、設定画面にエラーを表示します。対応するアプリまたは既知のバックアップで `localHooksConfiguration` を修復し、設定を再読み込みしてください。
+旧録音コマンドは初回に一度だけ汎用エントリーへ移行します。Webhook URLは変わりません。移行後に削除したコマンドは復活しません。設定破損・非対応バージョンではコマンドを停止し、設定画面にエラーを表示します。対応アプリや既知のバックアップで `localHooksConfiguration` を修復してください。
 
 ## Notion Meeting Notesを外部コマンドで利用する
 
-既存のheadless CLIを外部スクリプトやローカルフックから呼べます。事前に `ntn login` を実行し、必要なら `--ntn` でCLI絶対パスを渡してください。設定画面にNotion専用UIはありません。
+Notion送信は、アプリから独立した `splitvox-notion` CLIが担当します。アプリ本体にNotion処理や専用設定は含みません。CLIのソースは [Tools/notion-exporter](Tools/notion-exporter/README.md) にあり、アプリなしでビルド・実行できます。
 
 ```sh
-# 完了時フックの例（タイムアウトは600秒などに設定）
-"/Applications/Splitvox.app/Contents/MacOS/Splitvox" \
+# 独立CLIだけをビルド・インストール
+bash scripts/install-notion-hook.sh
+
+# 旧アプリが停止した状態で、旧設定・既知のフックを移行する場合
+bash scripts/install-notion-hook.sh --migrate
+```
+
+既存Notionフックがある場合は、**独立CLIのインストールと移行を先に完了してから新版アプリを起動**してください。移行は元のID・有効状態・引数・タイムアウトを保ち、旧設定をバックアップします。独自に編集された旧コマンドや不正な設定は変更せず停止します。アプリ側の旧Notion用CLI入口は廃止しました。
+
+事前に `ntn login` を実行してください。必要なら `--ntn <絶対パス>` でCLIを指定できます。完了時フックの例（タイムアウトは600秒など）:
+
+```sh
+"$HOME/.local/bin/splitvox-notion" \
   --notion-sync "$SPLITVOX_SESSION_DIRECTORY" --write \
-  --started-at "$SPLITVOX_RECORDING_STARTED_AT" \
-  --ntn "$HOME/bin/ntn" --window-minutes 10
+  --started-at "$SPLITVOX_RECORDING_STARTED_AT" --window-minutes 10
 ```
 
 - 開始時刻に近いMeeting Noteが1件ならNotes欄に追記、候補がなければ正式なMeeting Noteを含むページを新規作成します。`--parent-page <UUID>` が空ならワークスペース直下です。
@@ -239,24 +249,24 @@ SPLITVOX_SIGN_IDENTITY="任意の証明書名" bash scripts/make-app.sh
 - 音声は送りません。文字起こしテキストをNotionへ送ります。Transcript欄への注入やNotion AI要約は行いません。既存Notesを保持し、録音ごとの折りたたみ欄へ追記します。
 
 ```sh
-# 旧CLI設定の状態（通常アプリの自動送信状態ではありません）
-./Splitvox.app/Contents/MacOS/Splitvox --notion-status
+# 明示引数でのCLI設定（アプリの設定は読みません）
+"$HOME/.local/bin/splitvox-notion" --notion-status
 
 # 書き込みなしで候補を確認
-./Splitvox.app/Contents/MacOS/Splitvox --notion-sync /absolute/path/Recordings/20261027-100000
+"$HOME/.local/bin/splitvox-notion" --notion-sync /absolute/path/Recordings/20261027-100000
 
 # 対象を明示して保存
-./Splitvox.app/Contents/MacOS/Splitvox --notion-sync /absolute/path/Recordings/20261027-100000 \
+"$HOME/.local/bin/splitvox-notion" --notion-sync /absolute/path/Recordings/20261027-100000 \
   --write --note <meeting-note-block-id>
 ```
 
 `--started-at <ISO8601日時>`、`--ntn <絶対パス>`、`--parent-page <UUID>`、`--window-minutes <1〜120>` を指定できます。検索は開始の30日前から翌日までに作成されたノートを対象に、録音/カレンダー開始時刻（なければ作成時刻）を照合します。既定は前後10分です。検索上限では日付範囲を分割し、1日でも50件に達すると誤作成を避けて停止します。古いノートや候補が多い場合は `--note` を指定してください。
 
-フック内の互換CLIも同じプロセスグループで実行します。内側のAPIタイムアウトではグループを停止し、未確定の送信を自動で繰り返さないようジャーナルとロックを保持します。
+フック内の独立CLIも同じプロセスグループで実行します。内側のAPIタイムアウトではグループを停止し、未確定の送信を自動で繰り返さないようジャーナルとロックを保持します。
 
 CLIのエラーは録音フォルダの `session.log`、送信状態は `.notion-sync.json` に残ります。タイムアウト時は送信済みの可能性があり、次の実行で先にNotionの内容を照合します。照合できなければ再送を止めます。強制終了で `.notion-sync.lock` が残った場合は、送信処理が動いていないことと送信状態を確認してから、そのロックだけを削除してください。ジャーナルを消しての再実行は二重送信の原因になります。
 
-新規作成はNotionのMarkdown v2プレビューを利用します。[互換エクスポーターの設計](docs/design/notion-meeting-notes.md)・[ローカルフックの設計](docs/design/local-hooks.md)
+新規作成はNotionのMarkdown v2プレビューを利用します。[独立CLIの設計](docs/design/external-notion-cli.md)・[ローカルフックの設計](docs/design/local-hooks.md)
 
 ## 診断コマンド
 

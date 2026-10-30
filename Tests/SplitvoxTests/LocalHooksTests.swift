@@ -40,26 +40,6 @@ struct LocalHooksTests {
         #expect(try store.loadLocalHooks() == Array(first.dropFirst()))
     }
 
-    @Test("Legacy Notion preserves enablement and explicit parameters as shell literals", arguments: [true, false])
-    func migrateNotion(enabled: Bool) throws {
-        let defaults = isolated()
-        let store = PreferenceStore(defaults: defaults)
-        store.notionConfiguration = .init(enabled: enabled, cliPath: "/tmp/my cli'$(touch NEVER)", parentPageID: "parent';&", windowMinutes: 37)
-        let hooks = try store.loadLocalHooks(executablePath: "/tmp/My App'$(touch NEVER)/Splitvox")
-        #expect(hooks.count == 1)
-        let hook = try #require(hooks.first)
-        #expect(hook.enabled == enabled)
-        #expect(hook.event == .stopped)
-        #expect(hook.timeoutSeconds == 600)
-        #expect(hook.command.contains("--window-minutes '37.0'"))
-        // Execute only printf of the generated argv; never launch an exporter.
-        let output = try NotionCLI.run(executable: "/bin/sh", arguments: ["-c", "printf '%s\\n' " + hook.command], timeout: 2, environment: ["SPLITVOX_SESSION_DIRECTORY": "/tmp/session'$(noop)", "SPLITVOX_RECORDING_STARTED_AT": "2026-10-30T01:00:00Z"])
-        let argv = String(decoding: output, as: UTF8.self).split(separator: "\n").map(String.init)
-        #expect(argv == ["/tmp/My App'$(touch NEVER)/Splitvox", "--notion-sync", "/tmp/session'$(noop)", "--write", "--started-at", "2026-10-30T01:00:00Z", "--ntn", "/tmp/my cli'$(touch NEVER)", "--parent-page", "parent';&", "--window-minutes", "37.0"])
-        #expect(try store.loadLocalHooks() == hooks)
-        #expect(store.notionConfiguration.enabled == enabled)
-    }
-
     @Test("Absent preferences migrate to a durable empty list")
     func empty() throws {
         let defaults = isolated()
@@ -118,6 +98,16 @@ struct LocalHooksTests {
         }
         #expect(try LocalHookDraftValidation.timeout("600") == 600)
         #expect(try LocalHookDraftValidation.timeout(" 15 ") == 15)
+    }
+
+    @Test("Generic app storage never reads legacy service preferences")
+    func ignoresServicePreferences() throws {
+        let defaults = isolated()
+        let malformed = Data("unrelated legacy data".utf8)
+        defaults.set(malformed, forKey: "notionConfiguration")
+        let store = PreferenceStore(defaults: defaults)
+        #expect(try store.loadLocalHooks().isEmpty)
+        #expect(defaults.data(forKey: "notionConfiguration") == malformed)
     }
 
 }

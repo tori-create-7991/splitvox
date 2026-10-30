@@ -94,3 +94,10 @@ No live hooks, existing recordings or external exports are exercised by tests.
 ## 後続の変更
 
 None.
+
+## 後続の変更（独立CLI、2026-10-30）
+
+[ADR 0002](../adr/0002-external-notion-cli.md) moves the exporter out of the app.
+The runtime, migration and rollout contract is now
+[external-notion-cli](external-notion-cli.md). The historical app-owned headless
+entry and migration above describe the superseded implementation.

@@ -1,7 +1,6 @@
 import Foundation
-import AppKit
 import Testing
-@testable import Splitvox
+@testable import SplitvoxNotion
 
 @Suite("Notion meeting notes")
 struct NotionMeetingNotesTests {
@@ -39,9 +38,8 @@ struct NotionMeetingNotesTests {
         #expect(!text.contains("meeting-notes-section-transcript"))
     }
 
-    @Test("Settings default to disabled")
+    @Test("Standalone CLI matching window defaults to ten minutes")
     func defaults() {
-        #expect(!NotionConfiguration().enabled)
         #expect(NotionConfiguration().windowMinutes == 10)
     }
 }

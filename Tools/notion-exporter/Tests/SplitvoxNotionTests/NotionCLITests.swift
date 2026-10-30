@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Splitvox
+@testable import SplitvoxNotion
 
 @Suite("Notion CLI process")
 struct NotionCLITests {
@@ -51,16 +51,16 @@ struct NotionCLITests {
     // Unit test: validate arguments without discovering ntn or reading defaults.
     @Test("Window override is explicit, finite and within the supported range")
     func windowArguments() throws {
-        let legacy = NotionConfiguration(enabled: true, cliPath: "/tmp/fake ntn", parentPageID: "parent", windowMinutes: 37)
-        let config = try NotionCommand.configuration(["--window-minutes", "23", "--ntn", "/tmp/other", "--parent-page", ""], legacy: legacy)
+        let legacy = NotionConfiguration(cliPath: "/tmp/fake ntn", parentPageID: "parent", windowMinutes: 37)
+        let config = try NotionCommand.configuration(["--window-minutes", "23", "--ntn", "/tmp/other", "--parent-page", ""], base: legacy)
         #expect(config.windowMinutes == 23)
         #expect(config.cliPath == "/tmp/other")
         #expect(config.parentPageID.isEmpty)
-        #expect(try NotionCommand.configuration([], legacy: legacy) == legacy)
+        #expect(try NotionCommand.configuration([], base: legacy) == legacy)
         for invalid in ["0", "121", "nan", "inf", "abc", "--write"] {
-            #expect(throws: (any Error).self) { try NotionCommand.configuration(["--window-minutes", invalid], legacy: legacy) }
+            #expect(throws: (any Error).self) { try NotionCommand.configuration(["--window-minutes", invalid], base: legacy) }
         }
-        #expect(throws: (any Error).self) { try NotionCommand.configuration(["--window-minutes"], legacy: legacy) }
+        #expect(throws: (any Error).self) { try NotionCommand.configuration(["--window-minutes"], base: legacy) }
     }
 
 }
