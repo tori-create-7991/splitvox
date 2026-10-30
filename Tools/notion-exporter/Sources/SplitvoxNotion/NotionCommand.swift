@@ -4,26 +4,33 @@ enum NotionCommand {
     /// Pure arguments only. Normal export never reads host-app preferences.
     static func configuration(_ arguments: [String], base: NotionConfiguration = NotionConfiguration()) throws -> NotionConfiguration {
         var config = base
-        for flag in ["--ntn", "--parent-page", "--window-minutes", "--data-source", "--date-property"] {
-            let indices = arguments.indices.filter { arguments[$0] == flag }
-            guard indices.count <= 1 else { throw NotionFailure("引数が重複しています: " + flag) }
-            if let index = indices.first {
-                guard arguments.indices.contains(index + 1), !arguments[index + 1].hasPrefix("--") else {
-                    throw NotionFailure("引数に値が必要です: " + flag)
-                }
-                let value = arguments[index + 1]
-                switch flag {
-                case "--ntn": config.cliPath = value
-                case "--parent-page": config.parentPageID = value
-                case "--data-source": config.dataSourceID = value
-                case "--date-property": config.dateProperty = value
-                default:
-                    guard let minutes = Double(value), minutes.isFinite, (1...120).contains(minutes) else {
-                        throw NotionFailure("--window-minutesは1〜120の有限数で指定してください。")
-                    }
-                    config.windowMinutes = minutes
-                }
+        let valueFlags: Set<String> = ["--ntn", "--parent-page", "--window-minutes", "--data-source", "--date-property", "--notion-sync", "--started-at", "--note"]
+        let switches: Set<String> = ["--write", "--notion-status"]
+        var index = 0, seen: Set<String> = []
+        while index < arguments.count {
+            let flag = arguments[index]
+            guard valueFlags.contains(flag) || switches.contains(flag) else {
+                throw NotionFailure("不明な引数です: " + flag)
             }
+            guard seen.insert(flag).inserted else { throw NotionFailure("引数が重複しています: " + flag) }
+            if switches.contains(flag) { index += 1; continue }
+            guard arguments.indices.contains(index + 1), !arguments[index + 1].hasPrefix("--") else {
+                throw NotionFailure("引数に値が必要です: " + flag)
+            }
+            let value = arguments[index + 1]
+            switch flag {
+            case "--ntn": config.cliPath = value
+            case "--parent-page": config.parentPageID = value
+            case "--data-source": config.dataSourceID = value
+            case "--date-property": config.dateProperty = value
+            case "--window-minutes":
+                guard let minutes = Double(value), minutes.isFinite, (1...120).contains(minutes) else {
+                    throw NotionFailure("--window-minutesは1〜120の有限数で指定してください。")
+                }
+                config.windowMinutes = minutes
+            default: break // Operation values are consumed by run after validation.
+            }
+            index += 2
         }
         if arguments.contains("--data-source") || !config.dataSourceID.isEmpty {
             guard let id = UUID(uuidString: config.dataSourceID), config.parentPageID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {

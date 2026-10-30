@@ -227,4 +227,19 @@ struct NotionDataSourceTests {
         #expect(api.mutations == 0)
     }
 
+    @Test("Uncertain creation with multiple native notes requires explicit selection")
+    func ambiguousRecovery() throws {
+        let api = DatabaseAPI(), dir = try api.fixture()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        api.createTimeout = true
+        let service = NotionMeetingNotes(configuration: api.config, request: api.call)
+        #expect(throws: (any Error).self) { try service.export(directory: dir, startedAt: api.date) }
+        var second = api.note; second["id"] = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+        api.blocks[api.pageID] = [api.note, second]
+        #expect(throws: (any Error).self) { try service.export(directory: dir, startedAt: api.date) }
+        #expect(api.mutations == 1)
+        _ = try service.export(directory: dir, startedAt: api.date, selectedNoteID: api.noteID)
+        #expect(api.mutations == 3)
+    }
+
 }

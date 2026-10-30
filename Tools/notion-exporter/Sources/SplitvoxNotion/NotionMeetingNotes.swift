@@ -242,7 +242,9 @@ final class NotionMeetingNotes {
             }
             if let destination { try destination.verifyPage(state.pageID!) }
             let blocks = try children(state.pageID!)
-            guard let note = blocks.first(where: { $0["type"] as? String == "meeting_notes" }), let id = note["id"] as? String else { throw NotionFailure("正式なMeeting Noteが作成されませんでした。Markdown v2の対応状況を確認してください。") }
+            let notes = blocks.filter { $0["type"] as? String == "meeting_notes" }
+            guard notes.count <= 1 else { throw NotionFailure("ページにMeeting Noteが複数あります。--note <ID>で指定してください。") }
+            guard let id = notes.first?["id"] as? String else { throw NotionFailure("正式なMeeting Noteが作成されませんでした。Markdown v2の対応状況を確認してください。") }
             state.noteID = id; state.phase = "ready"; try save()
         }
         let block = try request("GET", "/v1/blocks/\(state.noteID!)", nil)

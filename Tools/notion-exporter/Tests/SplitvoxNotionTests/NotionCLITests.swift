@@ -93,3 +93,11 @@ func validDatabaseDestinationArguments() throws {
     #expect(config.dataSourceID == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
     #expect(config.dateProperty == "Recorded at")
 }
+
+// Unit: a mistyped destination must never enter workspace export mode.
+@Test("Unknown options and stray argument values are rejected")
+func unknownExportArguments() {
+    for args in [["--data-sorce", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"], ["--write", "unexpected"], ["--note"], ["--notion-status", "--notion-status"]] {
+        #expect(throws: (any Error).self) { try NotionCommand.configuration(args) }
+    }
+}
