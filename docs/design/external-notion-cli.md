@@ -78,3 +78,5 @@ recording changes, historical sends or automatic permission changes.
 ## 後続の変更
 
 None.
+
+- Standalone DB destination support: see [Notion database destination](notion-database-destination.md).
