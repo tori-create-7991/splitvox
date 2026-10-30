@@ -1,18 +1,45 @@
 import Foundation
 
 enum NotionCommand {
+    /// Pure argument validation so invalid overrides fail before CLI discovery
+    /// or any API request. Retained defaults are compatibility parameters only.
+    static func configuration(_ arguments: [String], legacy: NotionConfiguration) throws -> NotionConfiguration {
+        var config = legacy
+        for flag in ["--ntn", "--parent-page", "--window-minutes"] {
+            let indices = arguments.indices.filter { arguments[$0] == flag }
+            guard indices.count <= 1 else { throw NotionFailure("引数が重複しています: " + flag) }
+            if let index = indices.first {
+                guard arguments.indices.contains(index + 1), !arguments[index + 1].hasPrefix("--") else {
+                    throw NotionFailure("引数に値が必要です: " + flag)
+                }
+                let value = arguments[index + 1]
+                switch flag {
+                case "--ntn": config.cliPath = value
+                case "--parent-page": config.parentPageID = value
+                default:
+                    guard let minutes = Double(value), minutes.isFinite, (1...120).contains(minutes) else {
+                        throw NotionFailure("--window-minutesは1〜120の有限数で指定してください。")
+                    }
+                    config.windowMinutes = minutes
+                }
+            }
+        }
+        return config
+    }
+
     static func run(_ arguments: [String]) -> Int32 {
-        var config = PreferenceStore().notionConfiguration
         func value(_ flag: String) -> String? {
             guard let index = arguments.firstIndex(of: flag), arguments.indices.contains(index + 1) else { return nil }
             return arguments[index + 1]
         }
-        if let cli = value("--ntn") { config.cliPath = cli }
-        if let parent = value("--parent-page") { config.parentPageID = parent }
         do {
+            // Fully explicit scripts (including migrated hooks) need no
+            // ambient preferences. Retain fallback only for legacy callers.
+            let explicit = ["--ntn", "--parent-page", "--window-minutes"].allSatisfy(arguments.contains)
+            let config = try configuration(arguments, legacy: explicit ? NotionConfiguration() : PreferenceStore().notionConfiguration)
             let cli = try NotionCLI(path: config.cliPath)
             if arguments.contains("--notion-status") {
-                let data = try JSONSerialization.data(withJSONObject: ["enabled": config.enabled, "cli": cli.executable, "windowMinutes": config.windowMinutes, "parentConfigured": !config.parentPageID.isEmpty], options: [.sortedKeys])
+                let data = try JSONSerialization.data(withJSONObject: ["mode": "legacy_cli_configuration", "automaticExport": "external_local_hooks", "legacyEnabled": config.enabled, "cli": cli.executable, "windowMinutes": config.windowMinutes, "parentConfigured": !config.parentPageID.isEmpty], options: [.sortedKeys])
                 print(String(decoding: data, as: UTF8.self))
                 return 0
             }

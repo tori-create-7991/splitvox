@@ -19,7 +19,7 @@ struct NotionCLI {
             executable = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         } else { executable = NSString(string: path).expandingTildeInPath }
         guard executable.hasPrefix("/"), FileManager.default.isExecutableFile(atPath: executable) else {
-            throw NotionFailure("ntnが見つかりません。設定でCLIの絶対パスを指定してください。")
+            throw NotionFailure("ntnが見つかりません。--ntn <絶対パス>または外部スクリプトでCLIを指定してください。")
         }
     }
 
@@ -66,8 +66,14 @@ struct NotionCLI {
         let input = Darwin.open("/dev/null", O_RDONLY)
         guard input >= 0 else { throw NotionFailure("標準入力を閉じられませんでした。") }
         defer { close(input) }
-        guard posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT)) == 0,
-              posix_spawnattr_setpgroup(&attributes, 0) == 0,
+        // An exporter launched by a local hook must keep API requests inside
+        // that hook's lifetime. A numeric, verified marker cannot target an
+        // unrelated process group. Standalone CLI retains its own group.
+        let marker = environment["_SPLITVOX_LOCAL_HOOK_GROUP"].flatMap(Int32.init)
+        let managedGroup = marker.flatMap { $0 > 1 && $0 == getpgrp() ? $0 : nil }
+        let flags = POSIX_SPAWN_CLOEXEC_DEFAULT | (managedGroup == nil ? POSIX_SPAWN_SETPGROUP : 0)
+        guard posix_spawnattr_setflags(&attributes, Int16(flags)) == 0,
+              (managedGroup != nil || posix_spawnattr_setpgroup(&attributes, 0) == 0),
               posix_spawn_file_actions_adddup2(&actions, input, STDIN_FILENO) == 0,
               posix_spawn_file_actions_adddup2(&actions, out.fileDescriptor, STDOUT_FILENO) == 0,
               posix_spawn_file_actions_adddup2(&actions, err.fileDescriptor, STDERR_FILENO) == 0 else {
@@ -80,8 +86,9 @@ struct NotionCLI {
             }
         }
         guard spawned == 0 else { throw NotionFailure("ntnを起動できませんでした（\(spawned)）。CLIパスを確認してください。", definiteRejection: true) }
-        // This process owns its group, including children of a CLI wrapper.
-        defer { kill(-pid, SIGKILL) }
+        // Only standalone calls own the child group. The hook runner owns
+        // managed groups and cleans all remaining descendants on outer exit.
+        defer { if managedGroup == nil { kill(-pid, SIGKILL) } }
         var status: Int32 = 0
         let deadline = ProcessInfo.processInfo.systemUptime + timeout
         while true {
@@ -89,6 +96,11 @@ struct NotionCLI {
             if result == pid { break }
             if result < 0 && errno != EINTR { throw NotionFailure("ntnの終了を確認できませんでした。") }
             if ProcessInfo.processInfo.systemUptime >= deadline {
+                if let managedGroup {
+                    // Hard stop the verified outer group, including this
+                    // exporter. Its journal/lock stay for explicit recovery.
+                    kill(-managedGroup, SIGKILL)
+                }
                 kill(-pid, SIGTERM)
                 // Child wrappers may inherit a blocked/ignored SIGTERM.
                 // Kill the owned group before releasing the session lock.

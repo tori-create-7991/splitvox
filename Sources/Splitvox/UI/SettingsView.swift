@@ -22,10 +22,10 @@ struct SettingsView: View {
     @State private var warnOnSilentFarSide = true
     @State private var launchAtLogin = false
     @State private var loginItemMessage: String?
-    @State private var notion = NotionConfiguration()
-    @State private var recordingStartedCommand = ""
+    @State private var localHooks: [LocalHook] = []
+    @State private var localHooksError: String?
+    @State private var timeoutDrafts: [UUID: String] = [:]
     @State private var recordingStartedWebhookURL = ""
-    @State private var recordingStoppedCommand = ""
     @State private var recordingStoppedWebhookURL = ""
 
     /// Sentinel for "follow the system default", which is stored as nil.
@@ -224,31 +224,34 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Notion Meeting Notes") {
-                Toggle("文字起こし完了後にNotionへ保存する", isOn: $notion.enabled)
-                TextField("ntnの絶対パス（空欄で自動検出）", text: $notion.cliPath)
-                TextField("新規作成先の親ページID（空欄でワークスペース直下）", text: $notion.parentPageID)
-                Stepper("開始時刻の照合: 前後\(Int(notion.windowMinutes))分", value: $notion.windowMinutes, in: 1...120)
-                Text("文字起こし全文をMeeting NoteのNotes欄へ送信します。音声は送りません。複数候補はアプリで選択し、候補がなければ新規作成します。事前にntn loginを実行してください。")
+            Section("ローカルフック") {
+                Text("録音開始時・文字起こし完了時に、複数の外部コマンドを独立して実行します。追加・編集後は保存してください。")
+                    .font(.caption).foregroundStyle(.secondary)
+                if let localHooksError {
+                    Text(localHooksError).foregroundStyle(.red)
+                    Button("設定を再読み込み") { loadHooks() }
+                } else {
+                    ForEach($localHooks) { $hook in
+                        LocalHookEditor(hook: $hook, timeoutText: timeoutBinding(for: hook)) {
+                            localHooks.removeAll { $0.id == hook.id }
+                        }
+                        Divider()
+                    }
+                    Button("コマンドを追加") {
+                        localHooks.append(LocalHook(name: "新しいコマンド", enabled: false))
+                    }
+                }
+                Text("コマンドは /bin/zsh -lc で実行します。標準入力は閉じ、標準出力・標準エラーは破棄します。必要な診断はスクリプト側でファイルへ保存してください。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("環境変数: SPLITVOX_HOOK_EVENT、SPLITVOX_SESSION_DIRECTORY、SPLITVOX_RECORDING_STARTED_AT、SPLITVOX_HOOK_OCCURRED_AT。コマンドに認証情報を書くとUserDefaultsに平文保存されます。")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
-            Section("録音フック") {
-                Text("録音開始時と、文字起こし完了後にローカルコマンドと webhook を実行できます。フックの失敗は録音を止めません。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Group {
-                    TextField("開始時のローカルコマンド", text: $recordingStartedCommand)
-                    TextField("開始時の webhook URL", text: $recordingStartedWebhookURL)
-                    TextField("文字起こし完了時のローカルコマンド", text: $recordingStoppedCommand)
-                    TextField("文字起こし完了時の webhook URL", text: $recordingStoppedWebhookURL)
-                }
-                .textFieldStyle(.roundedBorder)
-
-                Text("コマンドには SPLITVOX_HOOK_EVENT、SPLITVOX_SESSION_DIRECTORY、SPLITVOX_RECORDING_STARTED_AT、SPLITVOX_HOOK_OCCURRED_AT を渡します。webhook は同じ値を JSON POST します。URL にトークンを含めると UserDefaults に平文で保存されます。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            Section("Webhook") {
+                TextField("録音開始時のURL", text: $recordingStartedWebhookURL)
+                TextField("文字起こし完了時のURL", text: $recordingStoppedWebhookURL)
+                Text("コマンドとは独立して、同じイベントのメタデータをJSON POSTします。空欄で無効です。URLに含めた認証情報はUserDefaultsに平文保存されます。")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
             Section("ショートカット") {
@@ -277,8 +280,24 @@ struct SettingsView: View {
         .onAppear(perform: load)
     }
 
+    private func timeoutBinding(for hook: LocalHook) -> Binding<String> {
+        Binding(get: { timeoutDrafts[hook.id] ?? String(hook.timeoutSeconds) },
+                set: { timeoutDrafts[hook.id] = $0 })
+    }
+
+    private func loadHooks() {
+        do {
+            localHooks = try store.loadLocalHooks()
+            timeoutDrafts = Dictionary(uniqueKeysWithValues: localHooks.map { ($0.id, String($0.timeoutSeconds)) })
+            localHooksError = nil
+        } catch {
+            localHooks = []
+            localHooksError = error.localizedDescription
+        }
+    }
+
     private func load() {
-        notion = store.notionConfiguration
+        loadHooks()
         bundleIDText = store.meetingBundleIDs.joined(separator: "\n")
         inputDevices = AudioDeviceLookup.availableInputDevices()
         installedApps = InstalledAppLookup.scan()
@@ -293,10 +312,8 @@ struct SettingsView: View {
         warnOnSilentFarSide = store.warnOnSilentFarSide
         excludedText = store.excludedBundleIDs.joined(separator: "\n")
         let startedHook = store.recordingHook(for: .started)
-        recordingStartedCommand = startedHook.command
         recordingStartedWebhookURL = startedHook.webhookURL
         let stoppedHook = store.recordingHook(for: .stopped)
-        recordingStoppedCommand = stoppedHook.command
         recordingStoppedWebhookURL = stoppedHook.webhookURL
 
         // Read from the system rather than from our own defaults: macOS is the
@@ -460,37 +477,42 @@ struct SettingsView: View {
     }
 
     private func save() {
-        let parent = notion.parentPageID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !notion.enabled || parent.isEmpty || UUID(uuidString: parent) != nil else {
-            savedMessage = "親ページIDはUUID形式で入力してください"
+        do {
+            for value in [recordingStartedWebhookURL, recordingStoppedWebhookURL] {
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    guard let url = URL(string: trimmed), ["https", "http"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else {
+                        throw LocalHookFailure("WebhookにはhttpまたはhttpsのURLを入力してください。")
+                    }
+                }
+            }
+            // A failed read must not overwrite an unknown document with [].
+            if localHooksError == nil {
+                var validated = localHooks
+                for index in validated.indices {
+                    validated[index].timeoutSeconds = try LocalHookDraftValidation.timeout(
+                        timeoutDrafts[validated[index].id] ?? String(validated[index].timeoutSeconds)
+                    )
+                }
+                try store.saveLocalHooks(validated)
+                localHooks = validated
+            }
+        } catch {
+            savedMessage = error.localizedDescription
             return
         }
-        notion.parentPageID = parent
-        store.notionConfiguration = notion
         store.meetingBundleIDs = bundleIDText
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }
 
         store.inputDeviceUID = selectedInputUID == Self.systemDefaultTag ? nil : selectedInputUID
-        store.setRecordingHook(
-            RecordingHookConfiguration(
-                command: recordingStartedCommand,
-                webhookURL: recordingStartedWebhookURL
-            ),
-            for: .started
-        )
-        store.setRecordingHook(
-            RecordingHookConfiguration(
-                command: recordingStoppedCommand,
-                webhookURL: recordingStoppedWebhookURL
-            ),
-            for: .stopped
-        )
+        store.setWebhookURL(recordingStartedWebhookURL, for: .started)
+        store.setWebhookURL(recordingStoppedWebhookURL, for: .stopped)
 
         // Re-read so the field shows what was actually kept, including the
         // fallback to defaults when the list was emptied.
         bundleIDText = store.meetingBundleIDs.joined(separator: "\n")
         excludedText = store.excludedBundleIDs.joined(separator: "\n")
-        savedMessage = "保存しました"
+        savedMessage = localHooksError == nil ? "保存しました" : "Webhookと一般設定を保存しました。ローカルフックの読込エラーは未解決です。"
     }
 }

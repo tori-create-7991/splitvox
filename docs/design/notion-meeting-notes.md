@@ -43,3 +43,11 @@ Markdown v2 is an opt-in preview. A future API change must fail with a visible l
 ## Subsequent changes
 
 None.
+
+## 後続の変更（2026-10-30）
+
+[Command-only local hooks](local-hooks.md) replaces the native Notion settings,
+candidate picker and automatic coordinator with generic external commands.
+Headless export and journal reconciliation remain; ambiguous candidates require
+dry-run inspection and explicit `--note`. The historical decisions above describe
+the original implementation.

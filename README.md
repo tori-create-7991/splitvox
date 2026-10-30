@@ -3,7 +3,7 @@
 オンライン会議を **システム音声とマイクの2ファイルに分けて録音**し、両方を端末内で
 文字起こしして、**話者ラベル付きの Markdown** を出力する macOS メニューバーアプリ。
 
-録音・文字起こしは端末内で処理します。Notionへの自動保存を有効にした場合は、文字起こしテキストをNotionへ送信します。会議にボットは参加しません。
+録音・文字起こしは端末内で処理します。外部コマンドやWebhookを設定した場合は、その設定に応じてデータが外部へ送信されます。会議にボットは参加しません。
 
 文字起こしは端末内で完結しますが、**端末にモデルが無い言語を選んだ場合のみ**、初回に
 Apple からモデルがダウンロードされます（音声は送信されません）。
@@ -190,39 +190,73 @@ SPLITVOX_SIGN_IDENTITY="任意の証明書名" bash scripts/make-app.sh
 `Splitvox.app` を `/Applications` などへ移した通常利用時は、書込み権限と配布の互換性のため
 `~/Library/Application Support/Splitvox/Recordings/` に保存されます。
 
-## 録音フック
+## ローカルフックとWebhook
 
-設定画面の「録音フック」で、録音開始時・文字起こし完了時それぞれにローカルコマンドと webhook URL を設定できます。
-コマンドは `/bin/zsh -lc` で最大15秒実行され、webhook は JSON の `POST` です。どちらも失敗しても録音を止めません。
+設定画面の「ローカルフック」で、名前・有効/無効・イベント・コマンド・タイムアウトを指定し、「保存」を押します。コマンドは複数追加・削除できます。サービス専用のプリセットはありません。「Webhook」では開始時と完了時のURLをそれぞれ設定できます（空欄で無効）。
 
-コマンド環境変数と webhook JSON には、イベント名、セッションフォルダ、録音開始時刻、発火時刻が含まれます。
-Webhook はセッションフォルダの絶対パスを外部へ送るため、信頼できるエンドポイントだけを設定してください。URLに含めたトークンは UserDefaults に平文保存されます。
+コマンドは `/bin/zsh -lc` で実行します。既定15秒、1〜3600秒の範囲で設定できます。最大4コマンドを並行実行し、残りは待機します。タイムアウトは実行開始から数え、シェルと同じグループの子プロセスを終了します。コマンド内で常駐化しないでください。Webhookは独立したJSON `POST`（タイムアウト15秒）で、遅いコマンドを待ちません。フックの失敗は録音を止めません。
 
-## Notion Meeting Notes への自動保存
+イベントは、録音が始まった時の `recording_started` と、空でない文字起こしを保存できた時の `recording_stopped` です。ライブ認識・ファイル認識のどちらも同じ完了イベントを1回だけ発火します。文字起こし失敗時・空の場合には完了イベントを送りません。
 
-設定の「Notion Meeting Notes」で有効にすると、文字起こし完了後にローカルの `ntn` CLIを使って全文をNotes欄へ保存します。事前に `ntn login` を実行してください。CLIが見つからなければ設定に実行ファイルの絶対パスを指定できます。設定変更後は「保存」を押してください。
+| コマンド環境変数 | Webhook JSON |
+|---|---|
+| `SPLITVOX_HOOK_EVENT` | `event` |
+| `SPLITVOX_SESSION_DIRECTORY` | `sessionDirectory` |
+| `SPLITVOX_RECORDING_STARTED_AT` | `recordingStartedAt` |
+| `SPLITVOX_HOOK_OCCURRED_AT` | `occurredAt` |
 
-- 録音開始時刻に近い既存Meeting Noteが1件なら追記、複数ならアプリで選択します。
-- 候補がなければ、正式なMeeting Noteを含むページを新規作成します。親ページIDを設定でき、空欄ならワークスペース直下です。
-- 音声は送信しません。文字起こしテキストはNotionへ送信されます。Transcript欄への注入とNotion AIによる自動要約は行いません。
-- 既存ノートのNotes欄は保持し、録音ごとの折りたたみ欄へ追記します。
+日時はISO 8601です。次のように複数の外部スクリプトをそれぞれ登録できます。パスの環境変数は必ず引用符で囲んでください。
 
-検索は録音開始の30日前から翌日までに作成されたノートを対象に、録音／カレンダー開始時刻（無ければ作成時刻）を照合します。既定は前後10分です。検索上限に達した場合は日付範囲を分割して照合し、1日だけでも50件に達する場合は誤った新規作成を避けて停止します。古いノートや候補が多い場合はCLIでノートIDを指定してください。
+```sh
+# 録音開始時: 自分の通知スクリプト
+"$HOME/bin/meeting-started" "$SPLITVOX_RECORDING_STARTED_AT"
 
-```bash
+# 文字起こし完了時: ローカル保管スクリプト
+"$HOME/bin/archive-transcript" "$SPLITVOX_SESSION_DIRECTORY/transcript.md"
+
+# 別の完了時コマンド: 外部連携スクリプト
+"$HOME/bin/send-meeting-summary" "$SPLITVOX_SESSION_DIRECTORY"
+```
+
+標準入力は閉じ、標準出力・標準エラーは破棄します。`session.log` にはフックID、イベント、開始/終了/タイムアウト、終了コードを記録し、コマンドやその出力は記録しません。設定内のIDとログのUUIDで対応を確認できます。詳しい診断が必要な場合は、スクリプト側で秘密や文字起こしの扱いに配慮してファイルへ保存してください。Webhookはセッションフォルダの絶対パスを外部へ送ります。URLやコマンドに書いた認証情報はUserDefaultsに平文保存されます。
+
+旧設定は初回に一度だけ移行します。旧コマンドは15秒、旧Notion設定は元の有効/無効とCLI・親ページ・照合窓を保持した通常コマンド（600秒）になります。Webhook URLは変わりません。移行後に削除したコマンドは復活しません。旧設定はロールバック用に保持されますが、通常アプリから別途Notionへ自動送信する経路はありません。アプリを移動したときは移行済みコマンド内の実行パスも更新してください。設定破損・非対応バージョンではコマンドを停止し、設定画面にエラーを表示します。対応するアプリまたは既知のバックアップで `localHooksConfiguration` を修復し、設定を再読み込みしてください。
+
+## Notion Meeting Notesを外部コマンドで利用する
+
+既存のheadless CLIを外部スクリプトやローカルフックから呼べます。事前に `ntn login` を実行し、必要なら `--ntn` でCLI絶対パスを渡してください。設定画面にNotion専用UIはありません。
+
+```sh
+# 完了時フックの例（タイムアウトは600秒などに設定）
+"/Applications/Splitvox.app/Contents/MacOS/Splitvox" \
+  --notion-sync "$SPLITVOX_SESSION_DIRECTORY" --write \
+  --started-at "$SPLITVOX_RECORDING_STARTED_AT" \
+  --ntn "$HOME/bin/ntn" --window-minutes 10
+```
+
+- 開始時刻に近いMeeting Noteが1件ならNotes欄に追記、候補がなければ正式なMeeting Noteを含むページを新規作成します。`--parent-page <UUID>` が空ならワークスペース直下です。
+- **複数候補は書き込まずエラーで停止します。** アプリの選択画面はありません。dry-runで候補を確認し、`--note <meeting-note-block-id>` で指定して再実行してください。
+- 音声は送りません。文字起こしテキストをNotionへ送ります。Transcript欄への注入やNotion AI要約は行いません。既存Notesを保持し、録音ごとの折りたたみ欄へ追記します。
+
+```sh
+# 旧CLI設定の状態（通常アプリの自動送信状態ではありません）
 ./Splitvox.app/Contents/MacOS/Splitvox --notion-status
 
 # 書き込みなしで候補を確認
 ./Splitvox.app/Contents/MacOS/Splitvox --notion-sync /absolute/path/Recordings/20261027-100000
 
-# 明示的に保存（--note は複数候補から選ぶときに指定）
+# 対象を明示して保存
 ./Splitvox.app/Contents/MacOS/Splitvox --notion-sync /absolute/path/Recordings/20261027-100000 \
   --write --note <meeting-note-block-id>
 ```
 
-`--started-at <ISO8601日時>`、`--ntn <CLI絶対パス>`、`--parent-page <UUID>` も指定できます。エラーは録音フォルダの `session.log`、送信状態は `.notion-sync.json` に残ります。タイムアウト時は送信済みの可能性があるため、次の実行は先にNotionの内容を照合します。照合できない場合は再送を止めるので、Notionと状態ファイルを確認してください。アプリが強制終了して `.notion-sync.lock` が残った場合は、送信処理が動いていないことを確認してからそのロックだけを削除してください。状態ファイルを消しての再実行は二重送信の原因になります。
+`--started-at <ISO8601日時>`、`--ntn <絶対パス>`、`--parent-page <UUID>`、`--window-minutes <1〜120>` を指定できます。検索は開始の30日前から翌日までに作成されたノートを対象に、録音/カレンダー開始時刻（なければ作成時刻）を照合します。既定は前後10分です。検索上限では日付範囲を分割し、1日でも50件に達すると誤作成を避けて停止します。古いノートや候補が多い場合は `--note` を指定してください。
 
-新規作成はNotionのMarkdown v2プレビューを利用します。[設計・制限](docs/design/notion-meeting-notes.md)
+フック内の互換CLIも同じプロセスグループで実行します。内側のAPIタイムアウトではグループを停止し、未確定の送信を自動で繰り返さないようジャーナルとロックを保持します。
+
+CLIのエラーは録音フォルダの `session.log`、送信状態は `.notion-sync.json` に残ります。タイムアウト時は送信済みの可能性があり、次の実行で先にNotionの内容を照合します。照合できなければ再送を止めます。強制終了で `.notion-sync.lock` が残った場合は、送信処理が動いていないことと送信状態を確認してから、そのロックだけを削除してください。ジャーナルを消しての再実行は二重送信の原因になります。
+
+新規作成はNotionのMarkdown v2プレビューを利用します。[互換エクスポーターの設計](docs/design/notion-meeting-notes.md)・[ローカルフックの設計](docs/design/local-hooks.md)
 
 ## 診断コマンド
 
@@ -264,13 +298,13 @@ swift Tools/audio-process-watch.swift 60
 
 | データ | 保存先 | 送信先 | 削除 |
 |---|---|---|---|
-| 会議の音声 (`me.wav` / `them.wav`) | 開発時: `./Recordings/`、通常時: `~/Library/Application Support/Splitvox/Recordings/` | **なし** | 自動削除しません |
-| 書き起こし (`transcript.md`) | 同上 | **なし** | 自動削除しません |
-| 診断ログ (`session.log`) | 同上 | **なし** | 自動削除しません |
-| 設定（アプリ一覧・除外一覧・入力デバイス・自動記録の条件と時間・言語） | `UserDefaults` | **なし** | — |
+| 会議の音声 (`me.wav` / `them.wav`) | 開発時: `./Recordings/`、通常時: `~/Library/Application Support/Splitvox/Recordings/` | 既定なし。設定した外部コマンドによる送信先 | 自動削除しません |
+| 書き起こし (`transcript.md`) | 同上 | 既定なし。設定した外部コマンドによる送信先 | 自動削除しません |
+| 診断ログ (`session.log`) | 同上 | 既定なし。設定した外部コマンドによる送信先 | 自動削除しません |
+| 設定（アプリ一覧・除外一覧・入力デバイス・自動記録・言語・コマンド・Webhook） | `UserDefaults` | **なし** | — |
 
-- 音声は送信しません。文字起こしは Apple のオンデバイスモデルで処理し、Notion保存を有効にした場合のみテキストをNotionへ送信します
-- 例外はモデルの取得のみです。端末に無い言語を選ぶと、初回の文字起こし時に Apple から
+- 録音・文字起こしの処理は端末内で完結します。設定した外部コマンドは音声・文字起こし等を任意の送信先へ送れます。互換Notion CLIは文字起こしのみを送り、Webhookはセッションのメタデータを送ります
+- モデルの取得にはネットワークを使用します。端末に無い言語を選ぶと、初回の文字起こし時に Apple から
   モデルがダウンロードされます
 - 録音ディレクトリは `0o700`（所有者のみ読み書き可）で作成されますが、**音声とテキストは
   暗号化されていません**。ディスク全体の暗号化（FileVault）の利用を推奨します

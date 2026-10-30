@@ -195,23 +195,28 @@ struct NotionExportTests {
         _ = try service.export(directory: directory, startedAt: date, selectedNoteID: api.noteID)
         #expect(api.mutations == 3)
     }
-    @Test("Duplicate picker labels preserve all IDs and later selections")
-    @MainActor func duplicateLabels() {
-        let notes = [NotionNote(id: "A", title: "Daily", notesID: "a", date: date),
-                     NotionNote(id: "B", title: "Daily", notesID: "b", date: date),
-                     NotionNote(id: "C", title: "Other", notesID: "c", date: date)]
-        let menu = NotionNotePicker.makeMenu(notes: notes)
-        #expect(menu.numberOfItems == 3)
-        #expect(menu.items.map { $0.representedObject as? String } == ["A", "B", "C"])
-    }
-    @Test("Completing one export keeps other pending choices visible")
-    func concurrentStatus() {
-        var status = NotionActivityStatus()
-        let first = UUID(), second = UUID()
-        status.jobs = [first: "送信中", second: "選択待ち"]
-        status.jobs.removeValue(forKey: first); status.lastResult = "保存しました"
-        #expect(status.summary.contains("処理中1件"))
-        #expect(status.summary.contains("選択待ち1件"))
+    @Test("Ambiguous headless export never guesses or writes; explicit note recovers")
+    func ambiguousHeadlessExport() throws {
+        let directory = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+        let api = FakeNotionAPI()
+        let service = NotionMeetingNotes(configuration: .init()) { method, endpoint, body in
+            if endpoint == "/v1/blocks/meeting_notes/query" {
+                var second = api.note
+                second["id"] = "44444444-4444-4444-8444-444444444444"
+                return ["results": [api.note, second]]
+            }
+            return try api.call(method, endpoint, body)
+        }
+        do {
+            _ = try service.export(directory: directory, startedAt: date)
+            Issue.record("Expected ambiguous candidate failure")
+        } catch {
+            #expect(error.localizedDescription.contains("--note <ID>"))
+            #expect(!error.localizedDescription.contains("アプリの選択画面"))
+        }
+        #expect(api.mutations == 0)
+        _ = try service.export(directory: directory, startedAt: date, selectedNoteID: api.noteID)
+        #expect(api.mutations == 2)
     }
 
     @Test("Large transcripts are batched and existing Notes pagination is followed")
