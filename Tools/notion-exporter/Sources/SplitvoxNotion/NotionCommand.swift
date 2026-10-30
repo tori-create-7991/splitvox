@@ -1,10 +1,9 @@
 import Foundation
 
 enum NotionCommand {
-    /// Pure argument validation so invalid overrides fail before CLI discovery
-    /// or any API request. Retained defaults are compatibility parameters only.
-    static func configuration(_ arguments: [String], legacy: NotionConfiguration) throws -> NotionConfiguration {
-        var config = legacy
+    /// Pure arguments only. Normal export never reads host-app preferences.
+    static func configuration(_ arguments: [String], base: NotionConfiguration = NotionConfiguration()) throws -> NotionConfiguration {
+        var config = base
         for flag in ["--ntn", "--parent-page", "--window-minutes"] {
             let indices = arguments.indices.filter { arguments[$0] == flag }
             guard indices.count <= 1 else { throw NotionFailure("引数が重複しています: " + flag) }
@@ -33,13 +32,10 @@ enum NotionCommand {
             return arguments[index + 1]
         }
         do {
-            // Fully explicit scripts (including migrated hooks) need no
-            // ambient preferences. Retain fallback only for legacy callers.
-            let explicit = ["--ntn", "--parent-page", "--window-minutes"].allSatisfy(arguments.contains)
-            let config = try configuration(arguments, legacy: explicit ? NotionConfiguration() : PreferenceStore().notionConfiguration)
+            let config = try configuration(arguments)
             let cli = try NotionCLI(path: config.cliPath)
             if arguments.contains("--notion-status") {
-                let data = try JSONSerialization.data(withJSONObject: ["mode": "legacy_cli_configuration", "automaticExport": "external_local_hooks", "legacyEnabled": config.enabled, "cli": cli.executable, "windowMinutes": config.windowMinutes, "parentConfigured": !config.parentPageID.isEmpty], options: [.sortedKeys])
+                let data = try JSONSerialization.data(withJSONObject: ["mode": "standalone_cli_configuration", "cli": cli.executable, "windowMinutes": config.windowMinutes, "parentConfigured": !config.parentPageID.isEmpty], options: [.sortedKeys])
                 print(String(decoding: data, as: UTF8.self))
                 return 0
             }
@@ -53,8 +49,7 @@ enum NotionCommand {
             let service = NotionMeetingNotes(configuration: config, request: cli.call)
             if arguments.contains("--write") {
                 let message = try service.export(directory: url, startedAt: startedAt, selectedNoteID: value("--note"))
-                let log = SessionLog(directory: url)
-                log.write("Notion: " + message); log.flush()
+                ExportLog.write("Notion: " + message, directory: url)
                 print(message)
             } else {
                 let notes = try service.candidates(startedAt: startedAt)
@@ -65,8 +60,7 @@ enum NotionCommand {
             return 0
         } catch {
             if arguments.contains("--write"), let directory = value("--notion-sync") {
-                let log = SessionLog(directory: URL(fileURLWithPath: directory))
-                log.write("Notion: " + error.localizedDescription); log.flush()
+                ExportLog.write("Notion: " + error.localizedDescription, directory: URL(fileURLWithPath: directory))
             }
             fputs("Notion: \(error.localizedDescription)\n", stderr)
             return 1

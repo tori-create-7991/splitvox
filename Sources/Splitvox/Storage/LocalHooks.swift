@@ -34,25 +34,6 @@ struct LocalHookFailure: LocalizedError {
     var errorDescription: String? { message }
 }
 
-/// Only constant arguments are quoted into shell source. Session values are
-/// passed through the environment and expanded as single, quoted arguments.
-enum LocalHookMigration {
-    static func quote(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
-    }
-
-    static func notion(_ configuration: NotionConfiguration, executablePath: String) -> LocalHook {
-        let command = quote(executablePath)
-            + " --notion-sync \"$SPLITVOX_SESSION_DIRECTORY\" --write"
-            + " --started-at \"$SPLITVOX_RECORDING_STARTED_AT\""
-            + " --ntn " + quote(configuration.cliPath)
-            + " --parent-page " + quote(configuration.parentPageID)
-            + " --window-minutes " + quote(String(configuration.windowMinutes))
-        return LocalHook(name: "Migrated export", enabled: configuration.enabled,
-                         event: .stopped, command: command, timeoutSeconds: 600)
-    }
-}
-
 /// Keep raw editor text until Save, so failed parsing cannot silently retain
 /// and save the previous numeric value.
 enum LocalHookDraftValidation {

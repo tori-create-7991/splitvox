@@ -3,7 +3,6 @@ import CryptoKit
 import Darwin
 
 struct NotionConfiguration: Codable, Equatable {
-    var enabled = false
     var cliPath = ""
     var parentPageID = ""
     var windowMinutes = 10.0

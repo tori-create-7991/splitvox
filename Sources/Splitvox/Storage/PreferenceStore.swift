@@ -41,22 +41,9 @@ struct PreferenceStore {
         self.defaults = defaults
     }
 
-    var notionConfiguration: NotionConfiguration {
-        get {
-            guard let data = defaults.data(forKey: "notionConfiguration"),
-                  var value = try? JSONDecoder().decode(NotionConfiguration.self, from: data) else { return NotionConfiguration() }
-            if !value.windowMinutes.isFinite { value.windowMinutes = 10 }
-            value.windowMinutes = min(120, max(1, value.windowMinutes))
-            return value
-        }
-        nonmutating set {
-            if let data = try? JSONEncoder().encode(newValue) { defaults.set(data, forKey: "notionConfiguration") }
-        }
-    }
-
     /// An existing document, including an empty one, is authoritative. Never
     /// fall back to legacy values after decoding/version/validation failure.
-    func loadLocalHooks(executablePath: String = Bundle.main.executableURL?.path ?? "") throws -> [LocalHook] {
+    func loadLocalHooks() throws -> [LocalHook] {
         if defaults.object(forKey: "localHooksConfiguration") != nil {
             guard let data = defaults.data(forKey: "localHooksConfiguration"),
                   let document = try? JSONDecoder().decode(LocalHooksDocument.self, from: data) else {
@@ -72,17 +59,6 @@ struct PreferenceStore {
                 hooks.append(LocalHook(name: event == .started ? "Migrated start command" : "Migrated completion command",
                                        event: event, command: command))
             }
-        }
-        let legacy = notionConfiguration
-        if defaults.object(forKey: "notionConfiguration") != nil {
-            // Decode explicitly here so malformed legacy data cannot silently
-            // become an empty, successfully migrated document.
-            guard let data = defaults.data(forKey: "notionConfiguration"),
-                  (try? JSONDecoder().decode(NotionConfiguration.self, from: data)) != nil else {
-                throw LocalHookFailure("旧エクスポート設定を読み込めません。移行前に保存済み設定を修復してください。")
-            }
-            guard executablePath.hasPrefix("/") else { throw LocalHookFailure("移行に必要なアプリの実行パスを確認できません。") }
-            hooks.append(LocalHookMigration.notion(legacy, executablePath: executablePath))
         }
         try saveLocalHooks(hooks)
         return hooks
