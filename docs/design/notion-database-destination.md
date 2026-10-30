@@ -27,4 +27,4 @@ Install the independent CLI and set the generic hook arguments to the chosen dat
 
 ## 後続の変更
 
-None.
+- Live API verification found native creation can reset the date property. The exporter restores the recording start on its newly created row after Notes writes and verifies it before completion. The metadata PATCH uses the same journal-before-dispatch and reconcile-or-stop rule; existing-row dates are preserved.

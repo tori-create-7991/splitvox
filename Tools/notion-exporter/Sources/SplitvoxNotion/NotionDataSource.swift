@@ -1,11 +1,17 @@
 import Foundation
 
-/// Database-only reads and creation metadata. It never mutates schema or content.
+/// Database scoping and page metadata. Never mutates schema or native Notes content.
 struct NotionDataSource {
     let configuration: NotionConfiguration
     let request: NotionMeetingNotes.Request
     let children: (String) throws -> [[String: Any]]
     var id: String { UUID(uuidString: configuration.dataSourceID)?.uuidString.lowercased() ?? configuration.dataSourceID }
+
+    static func dateText(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
+    }
 
     private func schema() throws -> String {
         guard UUID(uuidString: id) != nil,
@@ -53,18 +59,37 @@ struct NotionDataSource {
         }
     }
 
-    func verifyPage(_ pageID: String) throws {
+    private func page(_ pageID: String) throws -> [String: Any] {
         guard UUID(uuidString: pageID) != nil else { throw NotionFailure("ページIDが不正です。") }
-        try verifyMembership(request("GET", "/v1/pages/\(pageID)", nil))
+        let value = try request("GET", "/v1/pages/\(pageID)", nil)
+        try verifyMembership(value)
+        return value
     }
 
-    func verifyNote(_ note: [String: Any]) throws {
+    func verifyPage(_ pageID: String) throws { _ = try page(pageID) }
+
+    func recordingDate(_ pageID: String) throws -> Date? {
+        let value = try page(pageID)
+        guard let properties = value["properties"] as? [String: [String: Any]],
+              let property = properties[configuration.dateProperty] else { throw NotionFailure("開始日時の読み戻しに失敗しました。") }
+        if property["date"] is NSNull { return nil }
+        guard let date = property["date"] as? [String: Any], let raw = date["start"] as? String,
+              let parsed = NotionNote.parseDate(raw) else { throw NotionFailure("開始日時の応答が不正です。") }
+        return parsed
+    }
+
+    func setRecordingDate(_ pageID: String, startedAt: Date) throws {
+        _ = try request("PATCH", "/v1/pages/\(pageID)", ["properties": [configuration.dateProperty: ["date": ["start": Self.dateText(startedAt)]]]])
+    }
+
+    @discardableResult
+    func verifyNote(_ note: [String: Any]) throws -> String {
         _ = try schema()
         var block = note, seen: Set<String> = []
         for _ in 0..<32 {
             guard let parent = block["parent"] as? [String: Any] else { break }
             if parent["type"] as? String == "page_id", let pageID = parent["page_id"] as? String {
-                try verifyPage(pageID); return
+                try verifyPage(pageID); return pageID
             }
             guard parent["type"] as? String == "block_id", let blockID = parent["block_id"] as? String,
                   UUID(uuidString: blockID) != nil, seen.insert(blockID).inserted else { break }
@@ -76,6 +101,7 @@ struct NotionDataSource {
     func candidates(startedAt: Date) throws -> [NotionNote] {
         let titleProperty = try schema()
         let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let window = configuration.windowMinutes * 60
         let clauses: [[String: Any]] = [
             ["property": configuration.dateProperty, "date": ["on_or_after": formatter.string(from: startedAt.addingTimeInterval(-window))]],
@@ -119,7 +145,7 @@ struct NotionDataSource {
         let titleProperty = try schema()
         return ["parent": ["type": "data_source_id", "data_source_id": id],
                 "properties": [titleProperty: ["title": [["type": "text", "text": ["content": title]]]],
-                               configuration.dateProperty: ["date": ["start": ISO8601DateFormatter().string(from: startedAt)]]],
+                               configuration.dateProperty: ["date": ["start": Self.dateText(startedAt)]]],
                 "markdown_version": "v2", "markdown": NotionMeetingNotes.newNoteMarkdown()]
     }
 }

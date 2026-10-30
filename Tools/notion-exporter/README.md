@@ -35,7 +35,11 @@ column is discovered from the schema; the chosen date column (default
 data source and use that date ± the configured window. An invalid schema,
 unverifiable membership, or matching row without a native note stops export;
 there is no workspace fallback. Explicit `--note` must belong to the selected
-data source. No DB schema or template is modified.
+data source. No DB schema or template is modified. New native notes may reset
+the page date while being created; after writing Notes, the exporter restores
+and reads back the recording start on its newly created row. This metadata
+PATCH is journaled: uncertain results reconcile or stop without blind repeats.
+Existing-row exports preserve that row's date.
 
 One matching note is
 appended to, no candidate creates a native Meeting Note, and multiple candidates

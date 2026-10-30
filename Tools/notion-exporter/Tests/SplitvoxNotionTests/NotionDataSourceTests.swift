@@ -18,6 +18,10 @@ private final class DatabaseAPI {
     var mutations = 0
     var created: [String: Any]?
     var parentSource: String?
+    var overrideCreatedDate = false
+    var dateTimeoutBeforeCommit = false
+    var dateTimeoutAfterCommit = false
+    var datePatches = 0
     var createTimeout = false
     var queryPages: [[String: Any]] = []
     var note: [String: Any] {
@@ -45,8 +49,22 @@ private final class DatabaseAPI {
         if endpoint == "/v1/pages", method == "POST" {
             mutations += 1
             created = ["id": pageID, "parent": body!["parent"]!, "properties": body!["properties"]!]
+            if overrideCreatedDate {
+                var props = created!["properties"] as! [String: Any]
+                props["Start Date"] = ["date": ["start": "2026-10-30T01:44:00Z"]]
+                created!["properties"] = props
+            }
             blocks[pageID] = [note]
             if createTimeout { createTimeout = false; throw NotionFailure("timeout") }
+            return created!
+        }
+        if method == "PATCH", endpoint == "/v1/pages/" + pageID {
+            mutations += 1; datePatches += 1
+            if dateTimeoutBeforeCommit { dateTimeoutBeforeCommit = false; throw NotionFailure("timeout") }
+            var props = created!["properties"] as! [String: Any]
+            for (key, value) in body!["properties"] as! [String: Any] { props[key] = value }
+            created!["properties"] = props
+            if dateTimeoutAfterCommit { dateTimeoutAfterCommit = false; throw NotionFailure("timeout") }
             return created!
         }
         if method == "GET", endpoint == "/v1/pages/" + pageID { return created ?? row }
@@ -84,7 +102,7 @@ struct NotionDataSourceTests {
         #expect((page["parent"] as? [String: Any])?["data_source_id"] as? String == api.sourceID)
         let props = try #require(page["properties"] as? [String: Any])
         #expect(props["Meeting name"] != nil)
-        #expect(((props["Start Date"] as? [String: Any])?["date"] as? [String: Any])?["start"] as? String == "2026-10-30T01:00:00Z")
+        #expect(((props["Start Date"] as? [String: Any])?["date"] as? [String: Any])?["start"] as? String == "2026-10-30T01:00:00.000Z")
         #expect(props.count == 2)
         #expect(!api.calls.contains { $0.1 == "/v1/blocks/meeting_notes/query" })
         let before = api.calls.count
@@ -240,6 +258,51 @@ struct NotionDataSourceTests {
         #expect(api.mutations == 1)
         _ = try service.export(directory: dir, startedAt: api.date, selectedNoteID: api.noteID)
         #expect(api.mutations == 3)
+    }
+
+    @Test("New native note date override is restored before export completes")
+    func restoreNativeDate() throws {
+        let api = DatabaseAPI(), dir = try api.fixture()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        api.overrideCreatedDate = true
+        _ = try NotionMeetingNotes(configuration: api.config, request: api.call).export(directory: dir, startedAt: api.date)
+        let props = api.created!["properties"] as! [String: [String: Any]]
+        #expect((props["Start Date"]?["date"] as? [String: Any])?["start"] as? String == "2026-10-30T01:00:00.000Z")
+        #expect(api.datePatches == 1)
+    }
+
+    @Test("Committed date repair is reconciled after a timeout without another patch")
+    func committedDateRepair() throws {
+        let api = DatabaseAPI(), dir = try api.fixture()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        api.overrideCreatedDate = true; api.dateTimeoutAfterCommit = true
+        let service = NotionMeetingNotes(configuration: api.config, request: api.call)
+        #expect(throws: (any Error).self) { try service.export(directory: dir, startedAt: api.date) }
+        _ = try service.export(directory: dir, startedAt: api.date)
+        #expect(api.datePatches == 1)
+    }
+
+    @Test("Unconfirmed date repair stops instead of repeating a mutation")
+    func unknownDateRepair() throws {
+        let api = DatabaseAPI(), dir = try api.fixture()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        api.overrideCreatedDate = true; api.dateTimeoutBeforeCommit = true
+        let service = NotionMeetingNotes(configuration: api.config, request: api.call)
+        #expect(throws: (any Error).self) { try service.export(directory: dir, startedAt: api.date) }
+        #expect(throws: (any Error).self) { try service.export(directory: dir, startedAt: api.date) }
+        #expect(api.datePatches == 1)
+    }
+
+    @Test("Date repair preserves recording milliseconds")
+    func fractionalDateRepair() throws {
+        let api = DatabaseAPI(), dir = try api.fixture()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        api.overrideCreatedDate = true
+        let date = NotionNote.parseDate("2026-10-30T01:00:00.123Z")!
+        _ = try NotionMeetingNotes(configuration: api.config, request: api.call).export(directory: dir, startedAt: date)
+        let props = api.created!["properties"] as! [String: [String: Any]]
+        let raw = (props["Start Date"]?["date"] as! [String: Any])["start"] as! String
+        #expect(NotionNote.parseDate(raw) == date)
     }
 
 }

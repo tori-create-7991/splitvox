@@ -65,6 +65,7 @@ private struct NotionJournal: Codable {
     var pendingCount: Int?
     var completed = false
     var dataSourceID: String?
+    var pendingDateProperty: String?
 }
 
 /// All mutations are journaled before dispatch. An uncertain request is never
@@ -199,6 +200,9 @@ final class NotionMeetingNotes {
             state.dataSourceID = targetID
             try save()
         }
+        if let property = state.pendingDateProperty, property != configuration.dateProperty {
+            throw NotionFailure("未確定の開始日時更新があります。日時列を変更せず照合してください。")
+        }
         if state.noteID == nil {
             if let selectedNoteID {
                 guard UUID(uuidString: selectedNoteID) != nil else { throw NotionFailure("Meeting Note IDが不正です。") }
@@ -248,7 +252,12 @@ final class NotionMeetingNotes {
             state.noteID = id; state.phase = "ready"; try save()
         }
         let block = try request("GET", "/v1/blocks/\(state.noteID!)", nil)
-        if let destination { try destination.verifyNote(block) }
+        if let destination {
+            let pageID = try destination.verifyNote(block)
+            if let created = state.pageID, UUID(uuidString: created) != UUID(uuidString: pageID) {
+                throw NotionFailure("作成済みページと指定ノートのページが異なります。")
+            }
+        }
         state.dataSourceID = targetID; try save()
         let note = try NotionNote.decode(block)
         let marker = "Splitvox \(directory.lastPathComponent) [\(state.sessionID)]"
@@ -266,7 +275,7 @@ final class NotionMeetingNotes {
             groups = try children(note.notesID).filter { $0["type"] as? String == "toggle" && Self.plainText($0, type: "toggle") == marker }
         }
         guard groups.count == 1, let groupID = groups.first?["id"] as? String else { throw NotionFailure("追記先の読み戻しに失敗しました。") }
-        state.phase = "writing"; try save()
+        if state.phase != "dating" { state.phase = "writing"; try save() }
         let chunks = Self.chunks(transcript)
         var stored = try children(groupID)
         func validate() throws {
@@ -291,6 +300,24 @@ final class NotionMeetingNotes {
             try validate()
             guard stored.count >= end else { throw NotionFailure("送信内容の読み戻しが一致しません。") }
             state.pendingCount = nil; try save()
+        }
+        if let destination, let pageID = state.pageID {
+            // Native meeting-note creation can replace the supplied date with
+            // its creation time. Restore only this export's newly created row,
+            // after all Notes mutations, and reconcile an uncertain PATCH.
+            if try destination.recordingDate(pageID).map(NotionDataSource.dateText) != NotionDataSource.dateText(state.startedAt) {
+                guard state.phase != "dating" else { throw NotionFailure("開始日時更新の結果が不明です。再更新せずNotionを確認してください。") }
+                state.phase = "dating"; state.pendingDateProperty = configuration.dateProperty; try save()
+                do { try destination.setRecordingDate(pageID, startedAt: state.startedAt) }
+                catch {
+                    if (error as? NotionFailure)?.definiteRejection == true {
+                        state.phase = "writing"; state.pendingDateProperty = nil; try save()
+                    }
+                    throw error
+                }
+                guard try destination.recordingDate(pageID).map(NotionDataSource.dateText) == NotionDataSource.dateText(state.startedAt) else { throw NotionFailure("保存した開始日時の読み戻しが一致しません。") }
+            }
+            state.pendingDateProperty = nil
         }
         state.completed = true; state.phase = "complete"; try save()
         return "送信完了: https://www.notion.so/" + note.id.replacingOccurrences(of: "-", with: "")
