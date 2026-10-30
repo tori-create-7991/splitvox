@@ -191,7 +191,7 @@ final class NotionMeetingNotes {
                 try save()
             } else if state.phase == "ready" {
                 let matches = try candidates(startedAt: state.startedAt)
-                if matches.count > 1 { throw NotionFailure("候補が複数あります。アプリの選択画面またはCLIの--noteで指定してください。") }
+                if matches.count > 1 { throw NotionFailure("候補が複数あります。dry-runで確認してCLIの--note <ID>で指定してください。") }
                 state.noteID = matches.first?.id
                 try save()
             }
@@ -265,15 +265,5 @@ final class NotionMeetingNotes {
         }
         state.completed = true; state.phase = "complete"; try save()
         return "送信完了: https://www.notion.so/" + note.id.replacingOccurrences(of: "-", with: "")
-    }
-}
-
-struct NotionActivityStatus {
-    var jobs: [UUID: String] = [:]
-    var lastResult = "待機中"
-    var summary: String {
-        guard !jobs.isEmpty else { return "Notion: " + lastResult }
-        let waiting = jobs.values.filter { $0 == "選択待ち" }.count
-        return "Notion: 処理中\(jobs.count)件（選択待ち\(waiting)件）"
     }
 }

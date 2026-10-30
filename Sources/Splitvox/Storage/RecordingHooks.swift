@@ -1,6 +1,6 @@
 import Foundation
 
-enum RecordingHookEvent: String, Sendable {
+enum RecordingHookEvent: String, Codable, CaseIterable, Sendable {
     case started = "recording_started"
     case stopped = "recording_stopped"
 }
@@ -44,75 +44,77 @@ struct RecordingHookContext: Sendable {
     }
 }
 
-/// Runs user-configured commands and webhooks away from the recording actor.
-/// An integration must never delay or prevent audio capture.
-enum RecordingHookRunner {
-    private static let queue = DispatchQueue(
-        label: "io.github.tori-create-7991.splitvox.recording-hooks",
-        qos: .utility
-    )
+/// One recording owns at most one completion, shared by live and file paths.
+struct RecordingHookCompletion {
+    private var startedAt: Date?
+    mutating func start(at date: Date) { startedAt = date }
+    mutating func finish(directory: URL, usableTranscript: Bool, occurredAt: Date = Date()) -> RecordingHookContext? {
+        defer { startedAt = nil }
+        guard usableTranscript, let startedAt else { return nil }
+        return RecordingHookContext(event: .stopped, sessionDirectory: directory,
+                                    occurredAt: occurredAt, startedAt: startedAt)
+    }
+}
 
-    static func fire(_ configuration: RecordingHookConfiguration, context: RecordingHookContext) {
-        guard !configuration.isEmpty else { return }
+/// Four command workers bound concurrency. Webhooks are dispatched separately,
+/// without waiting for a worker or any preceding command.
+final class RecordingHookDispatcher {
+    static let shared = RecordingHookDispatcher()
+    private let commands: OperationQueue
+    private let postWebhook: (String, RecordingHookContext) -> Void
+    private let record: (URL, String) -> Void
 
-        queue.async {
-            runCommand(configuration.command, context: context)
-            postWebhook(configuration.webhookURL, context: context)
-        }
+    init(postWebhook: @escaping (String, RecordingHookContext) -> Void = { RecordingHookDispatcher.post($0, context: $1) },
+         record: @escaping (URL, String) -> Void = RecordingHookDispatcher.log) {
+        commands = OperationQueue()
+        commands.name = "splitvox.local-hooks"
+        commands.qualityOfService = .utility
+        commands.maxConcurrentOperationCount = 4
+        self.postWebhook = postWebhook
+        self.record = record
     }
 
-    private static func runCommand(_ command: String, context: RecordingHookContext) {
-        let command = command.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !command.isEmpty else { return }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-lc", command]
-        process.environment = ProcessInfo.processInfo.environment.merging(context.environment) { _, hookValue in
-            hookValue
-        }
-
-        let completion = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in completion.signal() }
-
-        do {
-            try process.run()
-            if completion.wait(timeout: .now() + 15) == .timedOut {
-                process.terminate()
-                NSLog("[Splitvox] %@ hook command timed out", context.event.rawValue)
-            } else if process.terminationStatus != 0 {
-                NSLog("[Splitvox] %@ hook command exited with status %d", context.event.rawValue,
-                      process.terminationStatus)
+    func fire(_ hooks: [LocalHook], webhookURL: String, context: RecordingHookContext) {
+        for hook in hooks where hook.enabled && hook.event == context.event {
+            let record = self.record
+            commands.addOperation {
+                let prefix = "hook \(hook.id.uuidString) \(context.event.rawValue) "
+                record(context.sessionDirectory, prefix + "started")
+                let result = LocalCommandRunner.run(hook, context: context)
+                record(context.sessionDirectory, prefix + result.logStatus)
             }
-        } catch {
-            NSLog("[Splitvox] %@ hook command failed: %@", context.event.rawValue,
-                  error.localizedDescription)
+        }
+        if !webhookURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            postWebhook(webhookURL, context)
         }
     }
 
-    private static func postWebhook(_ value: String, context: RecordingHookContext) {
-        let value = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty else { return }
-        guard let url = URL(string: value), let body = context.webhookBody else {
-            NSLog("[Splitvox] %@ hook webhook URL is invalid", context.event.rawValue)
+    static func log(_ directory: URL, _ message: String) {
+        let log = SessionLog(directory: directory)
+        log.write(message)
+        log.flush()
+    }
+
+    static func post(_ value: String, context: RecordingHookContext, session: URLSession = .shared,
+                     record: @escaping (URL, String) -> Void = RecordingHookDispatcher.log) {
+        guard let url = URL(string: value.trimmingCharacters(in: .whitespacesAndNewlines)),
+              ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil,
+              let body = context.webhookBody else {
+            record(context.sessionDirectory, "webhook \(context.event.rawValue) invalid_url")
             return
         }
-
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = 15
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = body
-
-        URLSession.shared.dataTask(with: request) { _, response, error in
-            if let error {
-                NSLog("[Splitvox] %@ hook webhook failed: %@", context.event.rawValue,
-                      error.localizedDescription)
-            } else if let response = response as? HTTPURLResponse,
-                      !(200..<300).contains(response.statusCode) {
-                NSLog("[Splitvox] %@ hook webhook returned HTTP %ld", context.event.rawValue,
-                      response.statusCode)
-            }
+        session.dataTask(with: request) { _, response, error in
+            // URLSession errors can include tokens in the URL. Status only.
+            let status: String
+            if error != nil { status = "failed" }
+            else if let response = response as? HTTPURLResponse { status = "http=\(response.statusCode)" }
+            else { status = "failed" }
+            record(context.sessionDirectory, "webhook \(context.event.rawValue) \(status)")
         }.resume()
     }
 }

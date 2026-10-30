@@ -54,6 +54,51 @@ struct PreferenceStore {
         }
     }
 
+    /// An existing document, including an empty one, is authoritative. Never
+    /// fall back to legacy values after decoding/version/validation failure.
+    func loadLocalHooks(executablePath: String = Bundle.main.executableURL?.path ?? "") throws -> [LocalHook] {
+        if defaults.object(forKey: "localHooksConfiguration") != nil {
+            guard let data = defaults.data(forKey: "localHooksConfiguration"),
+                  let document = try? JSONDecoder().decode(LocalHooksDocument.self, from: data) else {
+                throw LocalHookFailure("ローカルフックの設定を読み込めません。保存済み設定を確認・修復してください。旧設定への自動復帰は行いません。")
+            }
+            try document.validate()
+            return document.hooks
+        }
+        var hooks: [LocalHook] = []
+        for event in RecordingHookEvent.allCases {
+            let command = recordingHook(for: event).command
+            if !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                hooks.append(LocalHook(name: event == .started ? "Migrated start command" : "Migrated completion command",
+                                       event: event, command: command))
+            }
+        }
+        let legacy = notionConfiguration
+        if defaults.object(forKey: "notionConfiguration") != nil {
+            // Decode explicitly here so malformed legacy data cannot silently
+            // become an empty, successfully migrated document.
+            guard let data = defaults.data(forKey: "notionConfiguration"),
+                  (try? JSONDecoder().decode(NotionConfiguration.self, from: data)) != nil else {
+                throw LocalHookFailure("旧エクスポート設定を読み込めません。移行前に保存済み設定を修復してください。")
+            }
+            guard executablePath.hasPrefix("/") else { throw LocalHookFailure("移行に必要なアプリの実行パスを確認できません。") }
+            hooks.append(LocalHookMigration.notion(legacy, executablePath: executablePath))
+        }
+        try saveLocalHooks(hooks)
+        return hooks
+    }
+
+    func saveLocalHooks(_ hooks: [LocalHook]) throws {
+        let document = LocalHooksDocument(hooks: hooks)
+        try document.validate()
+        defaults.set(try JSONEncoder().encode(document), forKey: "localHooksConfiguration")
+    }
+
+    /// Webhook writes do not modify retained legacy commands.
+    func setWebhookURL(_ value: String, for event: RecordingHookEvent) {
+        defaults.set(value, forKey: event == .started ? Key.recordingStartedWebhookURL : Key.recordingStoppedWebhookURL)
+    }
+
     /// Applications whose output is captured.
     ///
     /// Falls back to the built-in list when the stored value is empty: an empty

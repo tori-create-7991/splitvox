@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// Append-only log written beside each recording.
 ///
@@ -27,13 +28,20 @@ final class SessionLog {
         queue.async { [url] in
             guard let data = line.data(using: .utf8) else { return }
 
-            if let handle = try? FileHandle(forWritingTo: url) {
-                defer { try? handle.close() }
-                _ = try? handle.seekToEnd()
-                try? handle.write(contentsOf: data)
-            } else {
-                try? data.write(to: url, options: .atomic)
+            // Multiple hook processes and app log instances can share this
+            // file. O_APPEND combines positioning and each write atomically;
+            // seekToEnd followed by write could overwrite another result.
+            let descriptor = Darwin.open(url.path, O_WRONLY | O_CREAT | O_APPEND, 0o600)
+            guard descriptor >= 0 else {
+                NSLog("[Splitvox] session log open failed")
+                return
             }
+            defer { close(descriptor) }
+            let written = data.withUnsafeBytes { bytes in
+                Darwin.write(descriptor, bytes.baseAddress, bytes.count)
+            }
+            if written != data.count { NSLog("[Splitvox] session log append failed") }
+
         }
     }
 
