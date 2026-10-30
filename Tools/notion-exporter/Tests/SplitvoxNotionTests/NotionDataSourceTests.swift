@@ -305,4 +305,16 @@ struct NotionDataSourceTests {
         #expect(NotionNote.parseDate(raw) == date)
     }
 
+    @Test("Missing content cannot erase uncertainty about a date update")
+    func dateRepairAfterMissingContent() throws {
+        let api = DatabaseAPI(), dir = try api.fixture()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        api.overrideCreatedDate = true; api.dateTimeoutBeforeCommit = true
+        let service = NotionMeetingNotes(configuration: api.config, request: api.call)
+        #expect(throws: (any Error).self) { try service.export(directory: dir, startedAt: api.date) }
+        api.blocks[api.notesID] = []
+        #expect(throws: (any Error).self) { try service.export(directory: dir, startedAt: api.date) }
+        #expect(api.datePatches == 1)
+    }
+
 }

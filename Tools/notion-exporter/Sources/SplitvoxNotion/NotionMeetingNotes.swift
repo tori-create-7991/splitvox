@@ -275,7 +275,7 @@ final class NotionMeetingNotes {
             groups = try children(note.notesID).filter { $0["type"] as? String == "toggle" && Self.plainText($0, type: "toggle") == marker }
         }
         guard groups.count == 1, let groupID = groups.first?["id"] as? String else { throw NotionFailure("追記先の読み戻しに失敗しました。") }
-        if state.phase != "dating" { state.phase = "writing"; try save() }
+        if state.pendingDateProperty == nil { state.phase = "writing"; try save() }
         let chunks = Self.chunks(transcript)
         var stored = try children(groupID)
         func validate() throws {
@@ -306,7 +306,7 @@ final class NotionMeetingNotes {
             // its creation time. Restore only this export's newly created row,
             // after all Notes mutations, and reconcile an uncertain PATCH.
             if try destination.recordingDate(pageID).map(NotionDataSource.dateText) != NotionDataSource.dateText(state.startedAt) {
-                guard state.phase != "dating" else { throw NotionFailure("開始日時更新の結果が不明です。再更新せずNotionを確認してください。") }
+                guard state.pendingDateProperty == nil else { throw NotionFailure("開始日時更新の結果が不明です。再更新せずNotionを確認してください。") }
                 state.phase = "dating"; state.pendingDateProperty = configuration.dateProperty; try save()
                 do { try destination.setRecordingDate(pageID, startedAt: state.startedAt) }
                 catch {
