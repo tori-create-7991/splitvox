@@ -101,3 +101,13 @@ func unknownExportArguments() {
         #expect(throws: (any Error).self) { try NotionCommand.configuration(args) }
     }
 }
+
+// Unit: run persists this error in session.log, so arbitrary values stay private.
+@Test("Unknown argument diagnostics never reflect positional content")
+func unknownArgumentPrivacy() {
+    let marker = "synthetic-sensitive-positional-value"
+    do {
+        _ = try NotionCommand.configuration(["--write", marker])
+        Issue.record("Expected argument rejection")
+    } catch { #expect(!error.localizedDescription.contains(marker)) }
+}

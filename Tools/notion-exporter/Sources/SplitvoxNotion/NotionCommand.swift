@@ -10,7 +10,7 @@ enum NotionCommand {
         while index < arguments.count {
             let flag = arguments[index]
             guard valueFlags.contains(flag) || switches.contains(flag) else {
-                throw NotionFailure("不明な引数です: " + flag)
+                throw NotionFailure("不明な引数があります。--helpで指定方法を確認してください。")
             }
             guard seen.insert(flag).inserted else { throw NotionFailure("引数が重複しています: " + flag) }
             if switches.contains(flag) { index += 1; continue }
