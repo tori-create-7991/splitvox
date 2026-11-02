@@ -68,6 +68,22 @@ open Splitvox.app
 
 `make-app.sh` は release ビルドの後、`.app` バンドルを生成して署名します。
 
+### インストール
+
+ビルドしたアプリを `/Applications/Splitvox.app` にインストールまたは更新するには:
+
+```bash
+bash scripts/install-app.sh
+```
+
+`/Applications` に書き込めない場合は、ユーザー領域へインストールできます。
+
+```bash
+SPLITVOX_INSTALL_DIR="$HOME/Applications" bash scripts/install-app.sh
+```
+
+スクリプトは既存アプリを新しいビルドに置き換えます。インストール後は `open /Applications/Splitvox.app` で起動できます。
+
 ### 署名について
 
 生バイナリではなく `.app` バンドルを作るのは、**macOS の権限（TCC）がバンドルIDと
