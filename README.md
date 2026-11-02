@@ -83,6 +83,7 @@ SPLITVOX_INSTALL_DIR="$HOME/Applications" bash scripts/install-app.sh
 ```
 
 スクリプトは既存アプリを新しいビルドに置き換えます。インストール後は `open /Applications/Splitvox.app` で起動できます。
+同じチェックアウトまたはインストール先への同時実行は停止します。ロックが残った場合は、実行中のインストールがないことと退避アプリの状態を確認してから再実行してください。
 
 ### 署名について
 
